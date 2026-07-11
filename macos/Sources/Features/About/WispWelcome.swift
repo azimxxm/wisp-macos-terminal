@@ -17,19 +17,20 @@ struct WispWelcomeView: View {
 
     var body: some View {
         ScrollView {
-            VStack(spacing: 26) {
+            VStack(spacing: 28) {
                 header
                 builtWithSection
                 featuresSection
                 authorSection
                 getStartedButton
             }
-            .padding(.horizontal, 40)
-            .padding(.top, 40)
-            .padding(.bottom, 32)
+            .padding(.horizontal, 46)
+            .padding(.top, 42)
+            .padding(.bottom, 34)
             .frame(maxWidth: .infinity)
         }
-        .frame(width: 620, height: 720)
+        .scrollIndicators(.hidden)
+        .frame(width: 780, height: 720)
         .tint(accent)
         .background(WelcomeBackground().ignoresSafeArea())
     }
@@ -40,21 +41,21 @@ struct WispWelcomeView: View {
         VStack(spacing: 12) {
             Image(nsImage: NSApp.applicationIconImage)
                 .resizable()
-                .frame(width: 92, height: 92)
+                .frame(width: 100, height: 100)
                 .shadow(color: .black.opacity(0.25), radius: 12, y: 6)
 
             Text("Welcome to Wisp")
-                .font(.system(size: 30, weight: .bold))
+                .font(.system(size: 32, weight: .bold))
 
             Text("A fast, native macOS terminal that never freezes —\nbuilt as a rock-solid host for AI coding CLIs.")
-                .font(.callout)
+                .font(.system(size: 16))
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
                 .fixedSize(horizontal: false, vertical: true)
 
             if let version {
                 Text("Version \(version) · Apple Silicon")
-                    .font(.caption)
+                    .font(.system(size: 13))
                     .foregroundStyle(.tertiary)
             }
         }
@@ -64,7 +65,7 @@ struct WispWelcomeView: View {
 
     private var builtWithSection: some View {
         WelcomeSection(title: "Built With", systemImage: "hammer.fill") {
-            VStack(alignment: .leading, spacing: 12) {
+            VStack(alignment: .leading, spacing: 14) {
                 TechRow(symbol: "cpu", title: "Ghostty core (Zig)",
                         detail: "SIMD VT parser via the libghostty C ABI")
                 TechRow(symbol: "square.stack.3d.up.fill", title: "Metal GPU renderer",
@@ -81,7 +82,7 @@ struct WispWelcomeView: View {
 
     private var featuresSection: some View {
         WelcomeSection(title: "Features", systemImage: "sparkles") {
-            VStack(alignment: .leading, spacing: 12) {
+            VStack(alignment: .leading, spacing: 14) {
                 FeatureRow(symbol: "bolt.fill",
                            text: "Never-freeze under heavy AI streaming (1M–3M+ tokens)")
                 FeatureRow(symbol: "slider.horizontal.3",
@@ -104,19 +105,19 @@ struct WispWelcomeView: View {
 
     private var authorSection: some View {
         WelcomeSection(title: "Author", systemImage: "person.crop.circle") {
-            VStack(alignment: .leading, spacing: 14) {
-                VStack(alignment: .leading, spacing: 2) {
+            VStack(alignment: .leading, spacing: 16) {
+                VStack(alignment: .leading, spacing: 3) {
                     Text("Azimjon Abdurasulov")
-                        .font(.headline)
+                        .font(.system(size: 18, weight: .semibold))
                     Text("Coding Tech LLC")
-                        .font(.subheadline)
+                        .font(.system(size: 15))
                         .foregroundStyle(.secondary)
                 }
 
                 LazyVGrid(
-                    columns: [GridItem(.adaptive(minimum: 132), spacing: 10)],
+                    columns: [GridItem(.adaptive(minimum: 150), spacing: 12)],
                     alignment: .leading,
-                    spacing: 10
+                    spacing: 12
                 ) {
                     LinkChip(title: "Website", symbol: "globe",
                              url: "https://azimjondev.uz/")
@@ -137,9 +138,9 @@ struct WispWelcomeView: View {
     private var getStartedButton: some View {
         Button(action: onDismiss) {
             Text("Get Started")
-                .font(.headline)
+                .font(.system(size: 16, weight: .semibold))
                 .frame(maxWidth: .infinity)
-                .padding(.vertical, 10)
+                .padding(.vertical, 11)
         }
         .buttonStyle(.borderedProminent)
         .controlSize(.large)
@@ -157,13 +158,13 @@ private struct WelcomeSection<Content: View>: View {
     @ViewBuilder var content: Content
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 14) {
+        VStack(alignment: .leading, spacing: 16) {
             Label(title, systemImage: systemImage)
-                .font(.headline)
+                .font(.system(size: 18, weight: .semibold))
             content
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(20)
+        .padding(22)
         .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
     }
 }
@@ -175,13 +176,14 @@ private struct TechRow: View {
     let detail: String
 
     var body: some View {
-        HStack(alignment: .firstTextBaseline, spacing: 12) {
+        HStack(alignment: .firstTextBaseline, spacing: 14) {
             Image(systemName: symbol)
-                .frame(width: 22)
+                .font(.system(size: 16))
+                .frame(width: 24)
                 .foregroundStyle(.tint)
             VStack(alignment: .leading, spacing: 2) {
-                Text(title).font(.callout.weight(.semibold))
-                Text(detail).font(.caption).foregroundStyle(.secondary)
+                Text(title).font(.system(size: 16, weight: .semibold))
+                Text(detail).font(.system(size: 13)).foregroundStyle(.secondary)
             }
             Spacer(minLength: 0)
         }
@@ -194,12 +196,13 @@ private struct FeatureRow: View {
     let text: String
 
     var body: some View {
-        HStack(alignment: .firstTextBaseline, spacing: 12) {
+        HStack(alignment: .firstTextBaseline, spacing: 14) {
             Image(systemName: symbol)
-                .frame(width: 22)
+                .font(.system(size: 16))
+                .frame(width: 24)
                 .foregroundStyle(.tint)
             Text(text)
-                .font(.callout)
+                .font(.system(size: 16))
                 .fixedSize(horizontal: false, vertical: true)
             Spacer(minLength: 0)
         }
@@ -219,13 +222,13 @@ private struct LinkChip: View {
             guard let link = URL(string: url) else { return }
             openURL(link)
         } label: {
-            HStack(spacing: 6) {
+            HStack(spacing: 7) {
                 Image(systemName: symbol)
                 Text(title)
             }
-            .font(.callout.weight(.medium))
-            .padding(.vertical, 8)
-            .padding(.horizontal, 14)
+            .font(.system(size: 15, weight: .medium))
+            .padding(.vertical, 9)
+            .padding(.horizontal, 16)
             .frame(maxWidth: .infinity)
             .background(.quaternary, in: Capsule())
             .contentShape(Capsule())
@@ -258,7 +261,7 @@ final class WispWelcomeController: NSWindowController {
 
     private init() {
         let window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 620, height: 720),
+            contentRect: NSRect(x: 0, y: 0, width: 780, height: 720),
             styleMask: [.titled, .closable, .fullSizeContentView],
             backing: .buffered,
             defer: false)
