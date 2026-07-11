@@ -1193,7 +1193,7 @@ class BaseTerminalController: NSWindowController,
         if window is TitlebarTabsTahoeTerminalWindow || window is TitlebarTabsVenturaTerminalWindow { return }
         guard window.styleMask.contains(.titled) else { return }
 
-        let container = NSView(frame: NSRect(x: 0, y: 0, width: 62, height: 28))
+        let container = NSView(frame: NSRect(x: 0, y: 0, width: 88, height: 28))
         let toggle = wispTitlebarButton(
             symbol: "sidebar.left",
             tooltip: "Toggle File Sidebar (⌘⌥B)",
@@ -1204,8 +1204,14 @@ class BaseTerminalController: NSWindowController,
             tooltip: "New Tab (⌘T)",
             action: #selector(wispNewTab(_:)))
         newTab.frame = NSRect(x: 32, y: 3, width: 24, height: 22)
+        let claudeHUD = wispTitlebarButton(
+            symbol: "gauge.with.dots.needle.bottom.50percent",
+            tooltip: "Claude usage & model",
+            action: #selector(toggleWispClaudeHUD(_:)))
+        claudeHUD.frame = NSRect(x: 58, y: 3, width: 24, height: 22)
         container.addSubview(toggle)
         container.addSubview(newTab)
+        container.addSubview(claudeHUD)
 
         let accessory = NSTitlebarAccessoryViewController()
         accessory.view = container
@@ -1225,6 +1231,29 @@ class BaseTerminalController: NSWindowController,
 
     @objc private func toggleWispSidebar(_ sender: Any?) {
         NotificationCenter.default.post(name: .wispToggleFileSidebar, object: nil)
+    }
+
+    /// Usage store + popover backing the Claude HUD titlebar button.
+    private let wispClaudeUsageStore = ClaudeUsageStore()
+    private var wispClaudeHUDPopover: NSPopover?
+
+    /// Shows (or hides) the Claude usage / model / effort popover from the gauge titlebar button.
+    /// Model and effort selections are sent as `/model` and `/effort` to the focused surface.
+    @objc private func toggleWispClaudeHUD(_ sender: Any?) {
+        if let popover = wispClaudeHUDPopover, popover.isShown {
+            popover.performClose(sender)
+            return
+        }
+        guard let button = sender as? NSView else { return }
+        wispClaudeUsageStore.reload()
+        let hud = ClaudeHUDView(store: wispClaudeUsageStore) { [weak self] text in
+            self?.focusedSurface?.surfaceModel?.sendText(text)
+        }
+        let popover = NSPopover()
+        popover.behavior = .transient
+        popover.contentViewController = NSHostingController(rootView: hud)
+        popover.show(relativeTo: button.bounds, of: button, preferredEdge: .maxY)
+        wispClaudeHUDPopover = popover
     }
 
     @objc private func wispNewTab(_ sender: Any?) {
