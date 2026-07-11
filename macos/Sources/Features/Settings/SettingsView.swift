@@ -12,14 +12,19 @@ struct SettingsView: View {
     }
 
     var body: some View {
-        NavigationSplitView {
+        // A fixed HStack instead of NavigationSplitView: the sidebar is always visible and there
+        // is no toolbar collapse toggle (NavigationSplitView adds one that can't be removed until
+        // macOS 15). The window title comes from SettingsWindowController.
+        HStack(spacing: 0) {
             List(SettingsSection.allCases, selection: $selectedSection) { section in
                 SettingsSidebarRow(section: section)
                     .tag(section)
             }
             .listStyle(.sidebar)
-            .navigationSplitViewColumnWidth(min: 190, ideal: 210, max: 260)
-        } detail: {
+            .frame(width: 210)
+
+            Divider()
+
             Group {
                 switch selectedSection ?? .appearance {
                 case .appearance:
@@ -35,7 +40,6 @@ struct SettingsView: View {
             .background(.regularMaterial)
         }
         .frame(minWidth: 700, idealWidth: 740, minHeight: 480, idealHeight: 560)
-        .navigationTitle("Wisp Settings")
     }
 }
 
