@@ -1661,6 +1661,9 @@ extension Ghostty {
             item.setImageIfDesired(systemSymbolName: "rectangle.bottomhalf.inset.filled")
             item = menu.addItem(withTitle: "Split Up", action: #selector(splitUp(_:)), keyEquivalent: "")
             item.setImageIfDesired(systemSymbolName: "rectangle.tophalf.inset.filled")
+            item = menu.addItem(withTitle: "Close Split", action: #selector(closeWispSplit(_:)), keyEquivalent: "w")
+            item.keyEquivalentModifierMask = [.command]
+            item.setImageIfDesired(systemSymbolName: "xmark.rectangle")
 
             menu.addItem(.separator())
             item = menu.addItem(withTitle: "Reset Terminal", action: #selector(resetTerminal(_:)), keyEquivalent: "")
@@ -1802,6 +1805,17 @@ extension Ghostty {
         @IBAction func splitUp(_ sender: Any) {
             guard let surface = self.surface else { return }
             ghostty_surface_split(surface, GHOSTTY_SPLIT_DIRECTION_UP)
+        }
+
+        /// Close the focused split pane (Warp-style). Mirrors the ⌘W `close_surface`
+        /// keybind so users who created a split from the context menu can also remove it
+        /// from the same menu instead of hunting for the shortcut.
+        @objc func closeWispSplit(_ sender: Any) {
+            guard let surface = self.surface else { return }
+            let action = "close_surface"
+            if !ghostty_surface_binding_action(surface, action, UInt(action.lengthOfBytes(using: .utf8))) {
+                AppDelegate.logger.warning("action failed action=\(action, privacy: .public)")
+            }
         }
 
         @objc func resetTerminal(_ sender: Any) {
