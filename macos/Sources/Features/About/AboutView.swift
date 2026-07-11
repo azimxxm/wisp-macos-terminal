@@ -76,7 +76,12 @@ struct AboutView: View {
 
     var body: some View {
         VStack(alignment: .center) {
-            CyclingIconView()
+            // Show the actual Wisp bundle icon (Wisp.icns) rather than cycling through the old
+            // Ghostty icon variants.
+            Image(nsImage: NSApp.applicationIconImage)
+                .resizable()
+                .aspectRatio(contentMode: .fit)
+                .frame(width: 128, height: 128)
 
             VStack(alignment: .center, spacing: 32) {
                 VStack(alignment: .center, spacing: 8) {
