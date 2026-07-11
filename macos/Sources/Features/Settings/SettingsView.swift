@@ -34,6 +34,10 @@ struct SettingsView: View {
                 case .themes:
                     // The gallery manages its own scrolling + pinned search field.
                     ThemeGalleryView(model: model)
+                case .notifications:
+                    NotificationSettingsView()
+                case .claude:
+                    ClaudePanelView()
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
@@ -66,6 +70,8 @@ private struct SettingsSidebarRow: View {
 enum SettingsSection: String, CaseIterable, Identifiable {
     case appearance
     case themes
+    case notifications
+    case claude
 
     var id: String { rawValue }
 
@@ -73,6 +79,8 @@ enum SettingsSection: String, CaseIterable, Identifiable {
         switch self {
         case .appearance: return "Appearance"
         case .themes: return "Themes"
+        case .notifications: return "Notifications"
+        case .claude: return "Claude"
         }
     }
 
@@ -80,6 +88,8 @@ enum SettingsSection: String, CaseIterable, Identifiable {
         switch self {
         case .appearance: return "paintbrush.fill"
         case .themes: return "paintpalette.fill"
+        case .notifications: return "bell.badge.fill"
+        case .claude: return "sparkles"
         }
     }
 
@@ -88,6 +98,8 @@ enum SettingsSection: String, CaseIterable, Identifiable {
         switch self {
         case .appearance: return .blue
         case .themes: return .pink
+        case .notifications: return .orange
+        case .claude: return .purple
         }
     }
 }

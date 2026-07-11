@@ -784,7 +784,7 @@ extension Ghostty {
             // the Dock so a long AI session that rings the bell — Claude Code rings it when it
             // finishes a turn or is waiting for input — reaches you even after you've walked away.
             // When Wisp is already frontmost we stay quiet; you're looking right at it.
-            guard !NSApp.isActive else { return }
+            guard !NSApp.isActive, WispNotificationDefaults.bellEnabled else { return }
             NSApp.requestUserAttention(.informationalRequest)
 
             // Mirror Ghostty's desktop-notification flow: ask for permission (once) then only post
@@ -801,7 +801,8 @@ extension Ghostty {
                     self?.showUserNotification(
                         title: "Wisp — attention needed",
                         body: "The terminal rang the bell. Click to jump back in.",
-                        requireFocus: false)
+                        requireFocus: false,
+                        sound: WispNotificationDefaults.soundEnabled)
                 }
             }
         }
@@ -1893,12 +1894,12 @@ extension Ghostty {
         }
 
         /// Show a user notification and associate it with this surface
-        func showUserNotification(title: String, body: String, requireFocus: Bool = true) {
+        func showUserNotification(title: String, body: String, requireFocus: Bool = true, sound: Bool = true) {
             let content = UNMutableNotificationContent()
             content.title = title
             content.subtitle = self.title
             content.body = body
-            content.sound = UNNotificationSound.default
+            if sound { content.sound = UNNotificationSound.default }
             content.categoryIdentifier = Ghostty.userNotificationCategory
             content.userInfo = [
                 "surface": self.id.uuidString,
