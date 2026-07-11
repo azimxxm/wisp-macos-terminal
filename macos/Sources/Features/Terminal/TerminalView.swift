@@ -59,6 +59,11 @@ struct TerminalView<ViewModel: TerminalViewModel>: View {
     /// The file currently open in the Markdown read/edit pane, if any.
     @State private var openMarkdownURL: URL?
 
+    /// The most recent non-empty working directory. The sidebar reads this instead of the live
+    /// focused pwd so that clicking into the sidebar's search field — which moves focus off the
+    /// terminal and makes the focused `pwd` go nil — does not blank the file list.
+    @State private var lastKnownPwd: URL?
+
     /// User-adjustable width of the file sidebar (dragged via the divider, persisted).
     @AppStorage("com.azimxxm.wisp.sidebarWidth") private var sidebarWidth: Double = 260
 
@@ -70,6 +75,17 @@ struct TerminalView<ViewModel: TerminalViewModel>: View {
     /// stored value can never produce a broken layout.
     private var clampedSidebarWidth: CGFloat {
         min(max(CGFloat(sidebarWidth), Self.sidebarWidthRange.lowerBound), Self.sidebarWidthRange.upperBound)
+    }
+
+    /// Live width while the divider is being dragged. Kept in memory (not `@AppStorage`) so a
+    /// drag updates only the layout and never touches UserDefaults per frame; the final value is
+    /// persisted once on drag end. `nil` whenever no drag is in progress.
+    @State private var liveSidebarWidth: CGFloat?
+
+    /// Width the sidebar actually renders at: the live drag value while dragging, otherwise the
+    /// persisted (clamped) value.
+    private var effectiveSidebarWidth: CGFloat {
+        liveSidebarWidth ?? clampedSidebarWidth
     }
 
     // Various state values sent back up from the currently focused terminals.
@@ -125,16 +141,20 @@ struct TerminalView<ViewModel: TerminalViewModel>: View {
                     // Warp-style file-explorer sidebar for the focused terminal's cwd.
                     if showSidebar {
                         FileSidebarView(
-                            cwd: pwdURL,
+                            cwd: lastKnownPwd ?? pwdURL,
                             onCollapse: { withAnimation(.easeInOut(duration: 0.15)) { showSidebar = false } }
                         ) { openInPane($0) }
-                            .frame(width: clampedSidebarWidth)
+                            .frame(width: effectiveSidebarWidth)
                             .transition(.move(edge: .leading).combined(with: .opacity))
                         SidebarResizeHandle(
                             width: Binding(
-                                get: { clampedSidebarWidth },
-                                set: { sidebarWidth = Double($0) }),
-                            range: Self.sidebarWidthRange)
+                                get: { effectiveSidebarWidth },
+                                set: { liveSidebarWidth = $0 }),
+                            range: Self.sidebarWidthRange,
+                            onCommit: {
+                                if let dragged = liveSidebarWidth { sidebarWidth = Double(dragged) }
+                                liveSidebarWidth = nil
+                            })
                     }
 
                     VStack(spacing: 0) {
@@ -150,7 +170,12 @@ struct TerminalView<ViewModel: TerminalViewModel>: View {
                             .environmentObject(ghostty)
                             .ghosttyLastFocusedSurface(lastFocusedSurface)
                             .focused($focused)
-                            .onAppear { self.focused = true }
+                            .onAppear {
+                                self.focused = true
+                                // Seed the sidebar cwd with the initial pwd (single-param onChange
+                                // above doesn't fire for the initial value on our deploy target).
+                                if lastKnownPwd == nil { lastKnownPwd = pwdURL }
+                            }
                             .onChange(of: focusedSurface) { newValue in
                                 // We want to keep track of our last focused surface so even if
                                 // we lose focus we keep this set to the last non-nil value.
@@ -161,6 +186,10 @@ struct TerminalView<ViewModel: TerminalViewModel>: View {
                             }
                             .onChange(of: pwdURL) { newValue in
                                 self.delegate?.pwdDidChange(to: newValue)
+                                // Remember the last real cwd so focus leaving the terminal (e.g.
+                                // clicking the sidebar search field, which nils the focused pwd)
+                                // doesn't blank the file list.
+                                if let newValue { lastKnownPwd = newValue }
                             }
                             .onChange(of: cellSize) { newValue in
                                 guard let size = newValue else { return }
@@ -223,6 +252,10 @@ private struct SidebarResizeHandle: View {
     @Binding var width: CGFloat
     let range: ClosedRange<CGFloat>
 
+    /// Called once when the drag ends so the caller can persist the final width, instead of
+    /// writing it on every frame.
+    var onCommit: () -> Void = {}
+
     /// Width at the moment the drag began, so the delta is applied to a stable base instead
     /// of accumulating across `onChanged` callbacks.
     @State private var dragStartWidth: CGFloat?
@@ -238,14 +271,21 @@ private struct SidebarResizeHandle: View {
                     .onHover { inside in
                         if inside { NSCursor.resizeLeftRight.push() } else { NSCursor.pop() }
                     }
+                    // `.global` coordinate space is essential here: the handle lives in the HStack
+                    // and is pushed sideways as the sidebar it controls grows/shrinks. In the
+                    // default `.local` space that motion corrupts `translation` every frame, so the
+                    // width oscillates and the UI flickers. Global space is a stable reference.
                     .gesture(
-                        DragGesture(minimumDistance: 0)
+                        DragGesture(minimumDistance: 0, coordinateSpace: .global)
                             .onChanged { value in
                                 let base = dragStartWidth ?? width
                                 if dragStartWidth == nil { dragStartWidth = base }
                                 width = min(max(base + value.translation.width, range.lowerBound), range.upperBound)
                             }
-                            .onEnded { _ in dragStartWidth = nil })
+                            .onEnded { _ in
+                                dragStartWidth = nil
+                                onCommit()
+                            })
             )
     }
 }
