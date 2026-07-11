@@ -14,19 +14,18 @@ struct SettingsView: View {
     var body: some View {
         NavigationSplitView {
             List(SettingsSection.allCases, selection: $selectedSection) { section in
-                Label(section.title, systemImage: section.systemImage)
+                SettingsSidebarRow(section: section)
                     .tag(section)
             }
             .listStyle(.sidebar)
-            .navigationSplitViewColumnWidth(min: 160, ideal: 180, max: 220)
+            .navigationSplitViewColumnWidth(min: 190, ideal: 210, max: 260)
         } detail: {
             Group {
                 switch selectedSection ?? .appearance {
                 case .appearance:
-                    // A Form isn't self-scrolling on macOS, so it needs the ScrollView.
-                    ScrollView {
-                        AppearanceSettingsView(model: model)
-                    }
+                    // A grouped Form scrolls itself on macOS — an outer ScrollView would flatten
+                    // the inset-grouped "cards" that give it the System Settings look.
+                    AppearanceSettingsView(model: model)
                 case .themes:
                     // The gallery manages its own scrolling + pinned search field.
                     ThemeGalleryView(model: model)
@@ -35,8 +34,27 @@ struct SettingsView: View {
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
             .background(.regularMaterial)
         }
-        .frame(minWidth: 680, idealWidth: 720, minHeight: 460, idealHeight: 520)
+        .frame(minWidth: 700, idealWidth: 740, minHeight: 480, idealHeight: 560)
         .navigationTitle("Wisp Settings")
+    }
+}
+
+/// A System Settings-style sidebar row: the section's SF Symbol in a tinted rounded square,
+/// followed by its title.
+private struct SettingsSidebarRow: View {
+    let section: SettingsSection
+
+    var body: some View {
+        HStack(spacing: 9) {
+            Image(systemName: section.systemImage)
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundStyle(.white)
+                .frame(width: 22, height: 22)
+                .background(section.tint, in: RoundedRectangle(cornerRadius: 6, style: .continuous))
+            Text(section.title)
+                .font(.system(size: 13))
+        }
+        .padding(.vertical, 2)
     }
 }
 
@@ -56,8 +74,16 @@ enum SettingsSection: String, CaseIterable, Identifiable {
 
     var systemImage: String {
         switch self {
-        case .appearance: return "paintbrush"
-        case .themes: return "paintpalette"
+        case .appearance: return "paintbrush.fill"
+        case .themes: return "paintpalette.fill"
+        }
+    }
+
+    /// Tint for the sidebar icon square (System Settings signature look).
+    var tint: Color {
+        switch self {
+        case .appearance: return .blue
+        case .themes: return .pink
         }
     }
 }
