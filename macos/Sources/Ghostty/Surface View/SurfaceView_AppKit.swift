@@ -1671,9 +1671,14 @@ extension Ghostty {
                 menu.addItem(.separator())
             }
 
-            // If we have a selection, add copy
+            // If we have a selection, add copy + a Warp-style "render as Markdown".
             if let text = self.accessibilitySelectedText(), text.count > 0 {
                 menu.addItem(withTitle: "Copy", action: #selector(copy(_:)), keyEquivalent: "")
+                item = menu.addItem(
+                    withTitle: "Render Selection as Markdown",
+                    action: #selector(wispRenderSelectionAsMarkdown(_:)),
+                    keyEquivalent: "")
+                item.setImageIfDesired(systemSymbolName: "doc.richtext")
             }
             menu.addItem(withTitle: "Paste", action: #selector(paste(_:)), keyEquivalent: "")
 
@@ -1711,6 +1716,30 @@ extension Ghostty {
         @objc private func wispOpenPathInPane(_ sender: NSMenuItem) {
             guard let url = sender.representedObject as? URL else { return }
             openResolvedPath(url)
+        }
+
+        /// Renders the current terminal selection as Markdown in the side pane. The selection is
+        /// written to a throwaway temp file — a fresh directory each time so the pane reloads —
+        /// and opened through the same flow the sidebar and ⌘-click use.
+        @objc private func wispRenderSelectionAsMarkdown(_ sender: Any?) {
+            guard let text = accessibilitySelectedText(), !text.isEmpty else { return }
+            let base = FileManager.default.temporaryDirectory
+                .appendingPathComponent("wisp-render", isDirectory: true)
+            // Clear prior renders so the temp area doesn't accumulate.
+            try? FileManager.default.removeItem(at: base)
+            let dir = base.appendingPathComponent(UUID().uuidString, isDirectory: true)
+            let fileURL = dir.appendingPathComponent("Rendered Output.md")
+            do {
+                try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+                try text.write(to: fileURL, atomically: true, encoding: .utf8)
+            } catch {
+                AppDelegate.logger.error("render selection failed: \(error, privacy: .public)")
+                return
+            }
+            NotificationCenter.default.post(
+                name: .wispOpenPath,
+                object: self,
+                userInfo: [wispOpenPathURLKey: fileURL])
         }
 
         @objc private func wispRevealPathInFinder(_ sender: NSMenuItem) {
