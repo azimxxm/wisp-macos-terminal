@@ -1,0 +1,88 @@
+import AppKit
+
+class DockTilePlugin: NSObject, NSDockTilePlugIn {
+    // WARNING: An instance of this class is alive as long as Wisp's icon is
+    // in the doc (running or not!), so keep any state and processing to a
+    // minimum to respect resource usage.
+
+    private let pluginBundle = Bundle(for: DockTilePlugin.self)
+
+    // Separate defaults based on debug vs release builds so we can test icons
+    // without messing up releases. These must match the suite the main app
+    // writes its icon choice to (UserDefaults.ghostty == the app's own domain).
+    #if DEBUG
+    private let ghosttyUserDefaults = UserDefaults(suiteName: "com.azimxxm.wisp.debug")
+    #else
+    private let ghosttyUserDefaults = UserDefaults(suiteName: "com.azimxxm.wisp")
+    #endif
+
+    private var iconChangeObserver: Any?
+
+    /// The primary NSDockTilePlugin function.
+    func setDockTile(_ dockTile: NSDockTile?) {
+        // If no dock tile or no access to Wisp defaults, we can't do anything.
+        guard let dockTile, let ghosttyUserDefaults else {
+            iconChangeObserver = nil
+            return
+        }
+
+        // Try to restore the previous icon on launch.
+        iconDidChange(ghosttyUserDefaults.appIcon, dockTile: dockTile)
+
+        // Setup a new observer for when the icon changes so we can update. This message
+        // is sent by the primary Wisp app.
+        iconChangeObserver = DistributedNotificationCenter
+            .default()
+            .publisher(for: .ghosttyIconDidChange)
+            .map { [weak self] _ in self?.ghosttyUserDefaults?.appIcon }
+            .receive(on: DispatchQueue.global())
+            .sink { [weak self] newIcon in self?.iconDidChange(newIcon, dockTile: dockTile) }
+    }
+
+    private func iconDidChange(_ newIcon: AppIcon?, dockTile: NSDockTile) {
+        guard let appIcon = newIcon?.image(in: pluginBundle) else {
+            resetIcon(dockTile: dockTile)
+            return
+        }
+
+        dockTile.setIcon(appIcon)
+    }
+
+    /// Reset the dock tile icon to the app's default (the Wisp bundle icon).
+    private func resetIcon(dockTile: NSDockTile) {
+        let appIcon: NSImage?
+        if #available(macOS 26.0, *) {
+            // Wisp: fall back to the bundle icon (the Wisp logo) for BOTH debug and
+            // release. Upstream Ghostty showed a "Blueprint" icon for DEBUG here to
+            // distinguish build types, but Wisp uses the "[DEBUG]" name suffix for that
+            // and we always want the real Wisp icon in the Dock.
+            appIcon = nil
+        } else {
+            // Use the bundled icon to keep the corner radius consistent with pre-Tahoe apps.
+            appIcon = pluginBundle.image(forResource: "AppIconImage")!
+        }
+        dockTile.setIcon(appIcon)
+    }
+}
+
+private extension NSDockTile {
+    func setIcon(_ newIcon: NSImage?) {
+        // Update the Dock tile on the main thread.
+        DispatchQueue.main.async {
+            guard let newIcon else {
+                self.contentView = nil
+                self.display()
+                return
+            }
+            let iconView = NSImageView(frame: CGRect(origin: .zero, size: self.size))
+            iconView.wantsLayer = true
+            iconView.image = newIcon
+            self.contentView = iconView
+            self.display()
+        }
+    }
+}
+
+// This is required because of the DispatchQueue call above. This doesn't
+// feel right but I don't know a better way to solve this.
+extension NSDockTile: @unchecked @retroactive Sendable {}
