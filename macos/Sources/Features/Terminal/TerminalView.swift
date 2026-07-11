@@ -141,8 +141,7 @@ struct TerminalView<ViewModel: TerminalViewModel>: View {
                     // Warp-style file-explorer sidebar for the focused terminal's cwd.
                     if showSidebar {
                         FileSidebarView(
-                            cwd: lastKnownPwd ?? pwdURL,
-                            onCollapse: { withAnimation(.easeInOut(duration: 0.15)) { showSidebar = false } }
+                            cwd: lastKnownPwd ?? pwdURL
                         ) { openInPane($0) }
                             .frame(width: effectiveSidebarWidth)
                             .transition(.move(edge: .leading).combined(with: .opacity))

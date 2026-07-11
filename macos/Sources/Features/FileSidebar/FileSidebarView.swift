@@ -11,9 +11,6 @@ import SwiftUI
 struct FileSidebarView: View {
     let cwd: URL?
     let onOpenFile: (URL) -> Void
-    /// Called when the user taps the collapse button in the header. Optional so the
-    /// sidebar can still be used without a host that manages its visibility.
-    let onCollapse: (() -> Void)?
 
     @State private var searchQuery = ""
     @State private var rootEntries: [FileEntry] = []
@@ -24,9 +21,8 @@ struct FileSidebarView: View {
     private static let maxSearchDepth = 8
     private static let searchDebounceMilliseconds = 150
 
-    init(cwd: URL?, onCollapse: (() -> Void)? = nil, onOpenFile: @escaping (URL) -> Void) {
+    init(cwd: URL?, onOpenFile: @escaping (URL) -> Void) {
         self.cwd = cwd
-        self.onCollapse = onCollapse
         self.onOpenFile = onOpenFile
     }
 
@@ -67,17 +63,6 @@ struct FileSidebarView: View {
 
     private func header(for cwd: URL) -> some View {
         HStack(spacing: 8) {
-            if let onCollapse {
-                Button(action: onCollapse) {
-                    Image(systemName: "sidebar.left")
-                        .font(.system(size: 13))
-                }
-                .buttonStyle(.plain)
-                .foregroundStyle(.secondary)
-                .help("Hide sidebar (⌘⌥B)")
-                .accessibilityLabel("Hide sidebar")
-            }
-
             Image(systemName: "folder.fill")
                 .font(.system(size: 13))
                 .foregroundStyle(.secondary)
