@@ -204,7 +204,7 @@ class AppDelegate: NSObject,
             // Practically, this means things like SMS autofill don't work, but that is
             // a desirable behavior to NOT have happen for a terminal, so this is a win.
             // Manual autofill via the `Edit => AutoFill` menu item still work as expected.
-            "NSAutoFillHeuristicControllerEnabled": false,
+            "NSAutoFillHeuristicControllerEnabled": false
         ])
     }
 
@@ -212,7 +212,7 @@ class AppDelegate: NSObject,
         // System settings overrides
         UserDefaults.ghostty.register(defaults: [
             // Disable this so that repeated key events make it through to our terminal views.
-            "ApplePressAndHoldEnabled": false,
+            "ApplePressAndHoldEnabled": false
         ])
 
         // Store our start time
@@ -231,6 +231,10 @@ class AppDelegate: NSObject,
 
         // Add the Wisp "Toggle File Sidebar" item to the View menu.
         installFileSidebarMenuItem()
+
+        // Add the Wisp "Welcome to Wisp" item to the Help menu and show it on first launch.
+        installWelcomeMenuItem()
+        showWispWelcomeIfFirstLaunch()
 
         // Start our update checker.
         updateController.startUpdater()
@@ -966,6 +970,34 @@ class AppDelegate: NSObject,
         item.target = self
         viewMenu.addItem(.separator())
         viewMenu.addItem(item)
+    }
+
+    /// Adds a "Welcome to Wisp" item to the Help menu so the first-launch welcome screen can be
+    /// reopened at any time.
+    private func installWelcomeMenuItem() {
+        guard let helpMenu = NSApp.mainMenu?.item(withTitle: "Help")?.submenu else { return }
+        let item = NSMenuItem(
+            title: "Welcome to Wisp",
+            action: #selector(showWispWelcome(_:)),
+            keyEquivalent: "")
+        item.target = self
+        helpMenu.insertItem(.separator(), at: 0)
+        helpMenu.insertItem(item, at: 0)
+    }
+
+    /// Shows the welcome screen only the first time Wisp is launched. The flag is set immediately
+    /// so dismissing it by any means prevents it from reappearing on the next launch.
+    private func showWispWelcomeIfFirstLaunch() {
+        let key = "com.azimxxm.wisp.hasSeenWelcome"
+        guard !UserDefaults.standard.bool(forKey: key) else { return }
+        UserDefaults.standard.set(true, forKey: key)
+        DispatchQueue.main.async {
+            WispWelcomeController.shared.show()
+        }
+    }
+
+    @objc func showWispWelcome(_ sender: Any?) {
+        WispWelcomeController.shared.show()
     }
 
     @IBAction func openConfig(_ sender: Any?) {
