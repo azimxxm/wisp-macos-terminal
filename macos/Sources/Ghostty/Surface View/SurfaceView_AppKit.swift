@@ -779,6 +779,31 @@ extension Ghostty {
         @objc private func ghosttyBellDidRing(_ notification: SwiftUI.Notification) {
             // Bell state goes to true
             bell = true
+
+            // Wisp: while the app is in the background, surface a desktop notification and bounce
+            // the Dock so a long AI session that rings the bell — Claude Code rings it when it
+            // finishes a turn or is waiting for input — reaches you even after you've walked away.
+            // When Wisp is already frontmost we stay quiet; you're looking right at it.
+            guard !NSApp.isActive else { return }
+            NSApp.requestUserAttention(.informationalRequest)
+
+            // Mirror Ghostty's desktop-notification flow: ask for permission (once) then only post
+            // if it was granted.
+            let center = UNUserNotificationCenter.current()
+            center.requestAuthorization(options: [.alert, .sound]) { _, error in
+                if let error {
+                    AppDelegate.logger.error("bell notification auth error: \(error, privacy: .public)")
+                }
+            }
+            center.getNotificationSettings { [weak self] settings in
+                guard settings.authorizationStatus == .authorized else { return }
+                DispatchQueue.main.async {
+                    self?.showUserNotification(
+                        title: "Wisp — attention needed",
+                        body: "The terminal rang the bell. Click to jump back in.",
+                        requireFocus: false)
+                }
+            }
         }
 
         @objc private func windowDidChangeScreen(notification: SwiftUI.Notification) {
