@@ -19,15 +19,4 @@ extension View {
             )
         }
     }
-
-    /// Glass styling for a small floating control such as the sidebar toggle. Falls back to
-    /// a bordered button on systems without Liquid Glass.
-    @ViewBuilder
-    func wispGlassButton() -> some View {
-        if #available(macOS 26.0, iOS 26.0, *) {
-            buttonStyle(.glass)
-        } else {
-            buttonStyle(.bordered)
-        }
-    }
 }
