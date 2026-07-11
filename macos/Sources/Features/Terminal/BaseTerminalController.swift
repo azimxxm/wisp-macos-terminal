@@ -1177,6 +1177,59 @@ class BaseTerminalController: NSWindowController,
 
         // Set our update overlay state
         updateOverlayIsVisible = defaultUpdateOverlayVisibility()
+
+        // Warp-style titlebar controls (sidebar toggle + new tab) at the leading edge.
+        addWispTitlebarControls()
+    }
+
+    // MARK: Wisp Titlebar Controls
+
+    /// Adds the file-sidebar toggle and a new-tab button to the leading edge of the
+    /// titlebar (like Warp) so they never overlap terminal content. Skipped for the
+    /// tabs-in-titlebar styles, which own their titlebar accessories — there ⌘⌥B and the
+    /// sidebar's built-in collapse button remain available.
+    private func addWispTitlebarControls() {
+        guard let window else { return }
+        if window is TitlebarTabsTahoeTerminalWindow || window is TitlebarTabsVenturaTerminalWindow { return }
+        guard window.styleMask.contains(.titled) else { return }
+
+        let container = NSView(frame: NSRect(x: 0, y: 0, width: 62, height: 28))
+        let toggle = wispTitlebarButton(
+            symbol: "sidebar.left",
+            tooltip: "Toggle File Sidebar (⌘⌥B)",
+            action: #selector(toggleWispSidebar(_:)))
+        toggle.frame = NSRect(x: 6, y: 3, width: 24, height: 22)
+        let newTab = wispTitlebarButton(
+            symbol: "plus",
+            tooltip: "New Tab (⌘T)",
+            action: #selector(wispNewTab(_:)))
+        newTab.frame = NSRect(x: 32, y: 3, width: 24, height: 22)
+        container.addSubview(toggle)
+        container.addSubview(newTab)
+
+        let accessory = NSTitlebarAccessoryViewController()
+        accessory.view = container
+        accessory.layoutAttribute = .leading
+        window.addTitlebarAccessoryViewController(accessory)
+    }
+
+    private func wispTitlebarButton(symbol: String, tooltip: String, action: Selector) -> NSButton {
+        let image = NSImage(systemSymbolName: symbol, accessibilityDescription: tooltip)
+        let button = NSButton(image: image ?? NSImage(), target: self, action: action)
+        button.isBordered = false
+        button.bezelStyle = .regularSquare
+        button.contentTintColor = .secondaryLabelColor
+        button.toolTip = tooltip
+        return button
+    }
+
+    @objc private func toggleWispSidebar(_ sender: Any?) {
+        NotificationCenter.default.post(name: .wispToggleFileSidebar, object: nil)
+    }
+
+    @objc private func wispNewTab(_ sender: Any?) {
+        // Route to the standard new-tab action on this window's controller chain.
+        tryToPerform(Selector(("newTab:")), with: sender)
     }
 
     func defaultUpdateOverlayVisibility() -> Bool {

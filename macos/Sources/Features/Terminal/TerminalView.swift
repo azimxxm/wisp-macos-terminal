@@ -180,30 +180,6 @@ struct TerminalView<ViewModel: TerminalViewModel>: View {
                     }
                 }
 
-                // Floating control to reveal the sidebar when it's hidden (Warp-style).
-                if !showSidebar {
-                    VStack(spacing: 0) {
-                        HStack(spacing: 0) {
-                            Button {
-                                withAnimation(.easeInOut(duration: 0.15)) { showSidebar = true }
-                            } label: {
-                                Image(systemName: "sidebar.left")
-                                    .font(.system(size: 13, weight: .medium))
-                                    .padding(6)
-                            }
-                            .wispGlassButton()
-                            .help("Show sidebar (⌘⌥B)")
-                            .accessibilityLabel("Show sidebar")
-                            .padding(.top, 10)
-                            .padding(.leading, 10)
-
-                            Spacer(minLength: 0)
-                        }
-                        Spacer(minLength: 0)
-                    }
-                    .transition(.opacity)
-                }
-
                 if let surfaceView = lastFocusedSurface?.value {
                     TerminalCommandPaletteView(
                         surfaceView: surfaceView,
