@@ -67,6 +67,13 @@ struct TerminalView<ViewModel: TerminalViewModel>: View {
     /// User-adjustable width of the file sidebar (dragged via the divider, persisted).
     @AppStorage("com.azimxxm.wisp.sidebarWidth") private var sidebarWidth: Double = 260
 
+    /// Warp-style git status bar visibility. It only renders when the cwd is a repo; this lets the
+    /// user hide it even then (toggled via the titlebar branch button / View ▸ Toggle Git Bar / ⌘⌥G).
+    @AppStorage("com.azimxxm.wisp.showGitBar") private var showGitBar = true
+
+    /// Reads the focused terminal's working directory and publishes its git state for the bottom bar.
+    @StateObject private var gitMonitor = GitRepositoryMonitor()
+
     /// Allowed sidebar width range. Computed (not stored) because `TerminalView` is generic
     /// and Swift forbids static stored properties in generic types.
     private static var sidebarWidthRange: ClosedRange<CGFloat> { 180...600 }
@@ -129,6 +136,14 @@ struct TerminalView<ViewModel: TerminalViewModel>: View {
         }
     }
 
+    /// Types a git command into the focused terminal (run via a trailing return) so it executes in
+    /// the user's own shell, then schedules a status refresh once it has had a moment to run.
+    private func runGitCommand(_ command: String) {
+        guard let surface = lastFocusedSurface?.value else { return }
+        surface.surfaceModel?.sendText(command + "\r")
+        gitMonitor.refreshSoon()
+    }
+
     var body: some View {
         switch ghostty.readiness {
         case .loading:
@@ -174,6 +189,7 @@ struct TerminalView<ViewModel: TerminalViewModel>: View {
                                 // Seed the sidebar cwd with the initial pwd (single-param onChange
                                 // above doesn't fire for the initial value on our deploy target).
                                 if lastKnownPwd == nil { lastKnownPwd = pwdURL }
+                                gitMonitor.activate(cwd: pwdURL)
                             }
                             .onChange(of: focusedSurface) { newValue in
                                 // We want to keep track of our last focused surface so even if
@@ -189,6 +205,9 @@ struct TerminalView<ViewModel: TerminalViewModel>: View {
                                 // clicking the sidebar search field, which nils the focused pwd)
                                 // doesn't blank the file list.
                                 if let newValue { lastKnownPwd = newValue }
+                                // Drive the git bar off the same stable cwd; a nil pwd (focus left the
+                                // terminal) keeps the last repo instead of clearing it.
+                                gitMonitor.activate(cwd: newValue ?? lastKnownPwd)
                             }
                             .onChange(of: cellSize) { newValue in
                                 guard let size = newValue else { return }
@@ -196,6 +215,18 @@ struct TerminalView<ViewModel: TerminalViewModel>: View {
                             }
                             .frame(idealWidth: lastFocusedSurface?.value?.initialSize?.width,
                                    idealHeight: lastFocusedSurface?.value?.initialSize?.height)
+
+                        // Warp-style git status bar, shown at the bottom of the terminal column
+                        // whenever the focused cwd is a git repo.
+                        if showGitBar, let gitStatus = gitMonitor.status {
+                            GitStatusBarView(
+                                status: gitStatus,
+                                run: runGitCommand,
+                                onRefresh: { gitMonitor.refresh(force: true) },
+                                onHide: { showGitBar = false }
+                            )
+                            .transition(.move(edge: .bottom).combined(with: .opacity))
+                        }
                     }
                     // Ignore safe area to extend up in to the titlebar region if we have the "hidden" titlebar style
                     .ignoresSafeArea(.container, edges: ghostty.config.macosTitlebarStyle == .hidden ? .top : [])
@@ -226,6 +257,9 @@ struct TerminalView<ViewModel: TerminalViewModel>: View {
             .frame(maxWidth: .greatestFiniteMagnitude, maxHeight: .greatestFiniteMagnitude)
             .onReceive(NotificationCenter.default.publisher(for: .wispToggleFileSidebar)) { _ in
                 withAnimation(.easeInOut(duration: 0.15)) { showSidebar.toggle() }
+            }
+            .onReceive(NotificationCenter.default.publisher(for: .wispToggleGitBar)) { _ in
+                withAnimation(.easeInOut(duration: 0.15)) { showGitBar.toggle() }
             }
             .onReceive(NotificationCenter.default.publisher(for: .wispOpenPath)) { note in
                 // Only the window whose focused surface fired this should open the file, so

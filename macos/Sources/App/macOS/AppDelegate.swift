@@ -232,6 +232,9 @@ class AppDelegate: NSObject,
         // Add the Wisp "Toggle File Sidebar" item to the View menu.
         installFileSidebarMenuItem()
 
+        // Add the Wisp "Toggle Git Bar" item to the View menu.
+        installGitBarMenuItem()
+
         // Add the Wisp "Welcome to Wisp" item to the Help menu and show it on first launch.
         installWelcomeMenuItem()
         showWispWelcomeIfFirstLaunch()
@@ -969,6 +972,23 @@ class AppDelegate: NSObject,
         item.keyEquivalentModifierMask = [.command, .option]
         item.target = self
         viewMenu.addItem(.separator())
+        viewMenu.addItem(item)
+    }
+
+    /// Toggles the Warp-style git status bar in the focused terminal window.
+    @IBAction func toggleGitBar(_ sender: Any?) {
+        NotificationCenter.default.post(name: .wispToggleGitBar, object: nil)
+    }
+
+    /// Adds a "Toggle Git Bar" item (⌘⌥G) to the View menu at runtime, next to the sidebar toggle.
+    private func installGitBarMenuItem() {
+        guard let viewMenu = NSApp.mainMenu?.item(withTitle: "View")?.submenu else { return }
+        let item = NSMenuItem(
+            title: "Toggle Git Bar",
+            action: #selector(toggleGitBar(_:)),
+            keyEquivalent: "g")
+        item.keyEquivalentModifierMask = [.command, .option]
+        item.target = self
         viewMenu.addItem(item)
     }
 
