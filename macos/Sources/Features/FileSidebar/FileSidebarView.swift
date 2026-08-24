@@ -21,9 +21,15 @@ struct FileSidebarView: View {
     let onInsertPath: (URL) -> Void
 
     @State private var searchQuery = ""
-    @State private var rootEntries: [FileEntry] = []
-    @State private var isLoadingRoot = false
     @State private var searchResults: [SearchResult] = []
+
+    /// Listings, expansion and file mutations for the whole tree. Owned here rather than
+    /// per-row so a rename or a delete can re-list just the affected folder without
+    /// collapsing every other one the user has open.
+    @StateObject private var model = FileTreeModel()
+
+    /// Item awaiting delete confirmation. Non-nil puts the confirmation dialog on screen.
+    @State private var pendingTrash: FileEntry?
 
     private static let maxSearchResults = 300
     private static let maxSearchDepth = 8
@@ -52,14 +58,38 @@ struct FileSidebarView: View {
                     searchField
                     Divider()
 
+                    if let errorMessage = model.errorMessage {
+                        errorBanner(errorMessage)
+                        Divider()
+                    }
+
                     if trimmedQuery.isEmpty {
-                        treeContent
+                        treeContent(for: cwd)
                     } else {
                         searchContent
                     }
                 }
                 .task(id: cwd) {
-                    await loadRoot(cwd: cwd)
+                    await model.setRoot(cwd)
+                }
+                .confirmationDialog(
+                    pendingTrash.map { "Move \"\($0.name)\" to the Trash?" } ?? "",
+                    isPresented: Binding(
+                        get: { pendingTrash != nil },
+                        set: { if !$0 { pendingTrash = nil } }),
+                    titleVisibility: .visible
+                ) {
+                    Button("Move to Trash", role: .destructive) {
+                        guard let target = pendingTrash else { return }
+                        pendingTrash = nil
+                        Task {
+                            await model.moveToTrash(
+                                target.url, isDirectory: target.isDirectory, confirmed: true)
+                        }
+                    }
+                    Button("Cancel", role: .cancel) { pendingTrash = nil }
+                } message: {
+                    Text("You can put it back from the Trash, or undo here in the sidebar.")
                 }
                 .task(id: SearchKey(cwd: cwd, query: trimmedQuery)) {
                     await runSearch(cwd: cwd, query: trimmedQuery)
@@ -87,7 +117,38 @@ struct FileSidebarView: View {
                 .help(cwd.path)
 
             Spacer(minLength: 0)
+
+            if let undoAction = model.undoBannerAction {
+                Button {
+                    Task { await model.undoLastOperation() }
+                } label: {
+                    Image(systemName: "arrow.uturn.backward")
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(.secondary)
+                .help("Undo \(undoAction)")
+                .accessibilityLabel("Undo \(undoAction)")
+            }
+
+            Button {
+                Task { await model.createFile(in: cwd) }
+            } label: {
+                Image(systemName: "doc.badge.plus")
+            }
+            .buttonStyle(.plain)
+            .foregroundStyle(.secondary)
+            .help("New File")
+
+            Button {
+                Task { await model.createFolder(in: cwd) }
+            } label: {
+                Image(systemName: "folder.badge.plus")
+            }
+            .buttonStyle(.plain)
+            .foregroundStyle(.secondary)
+            .help("New Folder")
         }
+        .font(.system(size: 12))
         .padding(.horizontal, 12)
         .padding(.vertical, 10)
         .accessibilityElement(children: .combine)
@@ -137,14 +198,37 @@ struct FileSidebarView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
+    /// Inline, non-blocking report of the last filesystem failure. Same shape as the
+    /// Markdown pane's banner so the two panes read as one app.
+    private func errorBanner(_ message: String) -> some View {
+        HStack(spacing: 6) {
+            Image(systemName: "exclamationmark.triangle")
+            Text(message)
+                .lineLimit(2)
+            Spacer(minLength: 0)
+            Button {
+                model.errorMessage = nil
+            } label: {
+                Image(systemName: "xmark")
+            }
+            .buttonStyle(.plain)
+        }
+        .font(.caption)
+        .foregroundStyle(.orange)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.horizontal, 12)
+        .padding(.vertical, 6)
+    }
+
     // MARK: - Tree & Search Content
 
     @ViewBuilder
-    private var treeContent: some View {
+    private func treeContent(for cwd: URL) -> some View {
         ScrollView {
             LazyVStack(alignment: .leading, spacing: 1) {
+                let rootEntries = model.children(of: cwd) ?? []
                 if rootEntries.isEmpty {
-                    if isLoadingRoot {
+                    if model.isLoading(cwd) {
                         ProgressView()
                             .controlSize(.small)
                             .frame(maxWidth: .infinity)
@@ -161,8 +245,10 @@ struct FileSidebarView: View {
                         FileTreeRow(
                             entry: entry,
                             depth: 0,
+                            model: model,
                             onOpenFile: onOpenFile,
-                            onInsertPath: onInsertPath)
+                            onInsertPath: onInsertPath,
+                            onRequestTrash: { pendingTrash = $0 })
                     }
                 }
             }
@@ -195,18 +281,6 @@ struct FileSidebarView: View {
     }
 
     // MARK: - Async Loading
-
-    /// Re-reads the top-level listing whenever `cwd` changes — `.task(id:)` cancels
-    /// any in-flight listing for the previous directory automatically.
-    @MainActor
-    private func loadRoot(cwd: URL) async {
-        isLoadingRoot = true
-        defer { isLoadingRoot = false }
-
-        let entries = await FileSidebarScanner.children(of: cwd)
-        guard !Task.isCancelled else { return }
-        rootEntries = entries
-    }
 
     /// Restarts whenever the directory or (trimmed) query changes. A short debounce
     /// avoids kicking off a new recursive scan on every single keystroke.
@@ -249,13 +323,16 @@ private struct SearchKey: Equatable {
 private struct FileTreeRow: View {
     let entry: FileEntry
     let depth: Int
+    @ObservedObject var model: FileTreeModel
     let onOpenFile: (URL) -> Void
     let onInsertPath: (URL) -> Void
+    let onRequestTrash: (FileEntry) -> Void
 
-    @State private var isExpanded = false
-    @State private var children: [FileEntry]?
-    @State private var isLoadingChildren = false
     @State private var isHovering = false
+
+    private var isExpanded: Bool { model.isExpanded(entry.url) }
+    private var children: [FileEntry]? { model.children(of: entry.url) }
+    private var isLoadingChildren: Bool { model.isLoading(entry.url) }
 
     private static let indentWidth: CGFloat = 14
     private static let baseLeadingPadding: CGFloat = 6
@@ -289,11 +366,20 @@ private struct FileTreeRow: View {
                     .foregroundStyle(entry.iconColor)
                     .frame(width: 16)
 
-                Text(entry.name)
-                    .font(.system(size: 12, weight: entry.isMarkdown ? .medium : .regular))
-                    .foregroundStyle(entry.isMarkdown ? Color.accentColor : Color.primary)
-                    .lineLimit(1)
-                    .truncationMode(.middle)
+                if model.isEditing(entry.url) {
+                    InlineRenameField(
+                        name: entry.name,
+                        onCommit: { newName in
+                            Task { await model.rename(entry.url, to: newName) }
+                        },
+                        onCancel: { model.cancelRename() })
+                } else {
+                    Text(entry.name)
+                        .font(.system(size: 12, weight: entry.isMarkdown ? .medium : .regular))
+                        .foregroundStyle(entry.isMarkdown ? Color.accentColor : Color.primary)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                }
 
                 Spacer(minLength: 0)
 
@@ -330,15 +416,62 @@ private struct FileTreeRow: View {
             dragPreview
         }
         .onHover { isHovering = $0 }
-        .contextMenu {
-            Button("Insert Path in Terminal") { onInsertPath(entry.url) }
-            Button("Reveal in Finder") {
-                NSWorkspace.shared.activateFileViewerSelecting([entry.url])
-            }
-        }
+        .contextMenu { contextMenu }
         // ⌥-click has no visual affordance, so the tooltip is where it gets taught.
         .help("\(entry.url.path)\n⌥-click to insert this path into the terminal")
         .accessibilityLabel(entry.isDirectory ? "Folder, \(entry.name)" : "File, \(entry.name)")
+    }
+
+    /// Per-row file management. Single-item only: the tree has no multi-selection, so every
+    /// action here operates on exactly this entry.
+    ///
+    /// "Move to Trash" is separated from the rest and routed through the host's confirmation
+    /// dialog — on macOS a `.destructive` button does not render red inside a context menu,
+    /// so position and the confirmation are what signal danger, not colour.
+    @ViewBuilder
+    private var contextMenu: some View {
+        Button("Insert Path in Terminal") { onInsertPath(entry.url) }
+        Button("Reveal in Finder") {
+            NSWorkspace.shared.activateFileViewerSelecting([entry.url])
+        }
+
+        Divider()
+
+        if entry.isDirectory {
+            Button("New File") { Task { await model.createFile(in: entry.url) } }
+            Button("New Folder") { Task { await model.createFolder(in: entry.url) } }
+            Divider()
+        }
+
+        Button("Rename") { model.beginRename(entry.url) }
+        Button("Duplicate") {
+            Task { await model.duplicate(entry.url, isDirectory: entry.isDirectory) }
+        }
+
+        Divider()
+
+        Button("Copy Path") { copyToPasteboard(entry.url.path) }
+        Button("Copy Relative Path") {
+            copyToPasteboard(relativePath(of: entry.url, under: model.root) ?? entry.url.path)
+        }
+
+        Divider()
+
+        Button("Move to Trash") { onRequestTrash(entry) }
+    }
+
+    private func copyToPasteboard(_ value: String) {
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(value, forType: .string)
+    }
+
+    /// `url` written relative to the sidebar's root, or nil when it is not inside it.
+    private func relativePath(of url: URL, under root: URL?) -> String? {
+        guard let root else { return nil }
+        let rootPath = root.standardizedFileURL.path
+        let filePath = url.standardizedFileURL.path
+        guard rootPath != "/", filePath.hasPrefix(rootPath + "/") else { return nil }
+        return String(filePath.dropFirst(rootPath.count + 1))
     }
 
     /// Compact chip shown under the cursor during a drag. Without an explicit preview
@@ -375,8 +508,10 @@ private struct FileTreeRow: View {
                         FileTreeRow(
                             entry: child,
                             depth: depth + 1,
+                            model: model,
                             onOpenFile: onOpenFile,
-                            onInsertPath: onInsertPath)
+                            onInsertPath: onInsertPath,
+                            onRequestTrash: onRequestTrash)
                     }
                 }
             }
@@ -407,14 +542,98 @@ private struct FileTreeRow: View {
             return
         }
 
-        isExpanded.toggle()
-        guard isExpanded, children == nil, !isLoadingChildren else { return }
+        Task { await model.toggleExpansion(of: entry.url) }
+    }
+}
 
-        isLoadingChildren = true
-        Task {
-            let loaded = await FileSidebarScanner.children(of: entry.url)
-            isLoadingChildren = false
-            children = loaded
+// MARK: - Inline Rename Field
+
+/// In-place rename editor for one row.
+///
+/// An `NSTextField` rather than SwiftUI's `TextField` for one reason: only the basename
+/// should be selected when the editor opens, so typing a new name never silently eats the
+/// extension — and SwiftUI still exposes no public API for a text field's selected range.
+/// Dotfiles (`.gitignore`) select the whole name, matching VS Code.
+private struct InlineRenameField: NSViewRepresentable {
+    let name: String
+    let onCommit: (String) -> Void
+    let onCancel: () -> Void
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator(onCommit: onCommit, onCancel: onCancel)
+    }
+
+    func makeNSView(context: Context) -> NSTextField {
+        let field = NSTextField(string: name)
+        field.delegate = context.coordinator
+        field.isBordered = false
+        field.drawsBackground = true
+        field.backgroundColor = .textBackgroundColor
+        field.focusRingType = .default
+        field.font = .systemFont(ofSize: 12)
+        field.lineBreakMode = .byTruncatingMiddle
+        field.isAutomaticTextCompletionEnabled = false
+        field.usesSingleLineMode = true
+
+        DispatchQueue.main.async {
+            guard let window = field.window else { return }
+            window.makeFirstResponder(field)
+            // `currentEditor()` only exists once the field is first responder, which is why
+            // this cannot happen inline above.
+            guard let editor = field.currentEditor() else { return }
+            let stem = (name as NSString).deletingPathExtension
+            // A leading dot means the whole thing is the name, not an extension.
+            let selectable = (stem.isEmpty || name.hasPrefix(".")) ? name.count : stem.count
+            editor.selectedRange = NSRange(location: 0, length: selectable)
+        }
+
+        return field
+    }
+
+    func updateNSView(_ field: NSTextField, context: Context) {
+        context.coordinator.onCommit = onCommit
+        context.coordinator.onCancel = onCancel
+    }
+
+    final class Coordinator: NSObject, NSTextFieldDelegate {
+        var onCommit: (String) -> Void
+        var onCancel: () -> Void
+        /// Guards against the commit firing twice — Return triggers `doCommandBy` and then
+        /// AppKit ends editing, which would otherwise commit the same name again.
+        private var finished = false
+
+        init(onCommit: @escaping (String) -> Void, onCancel: @escaping () -> Void) {
+            self.onCommit = onCommit
+            self.onCancel = onCancel
+        }
+
+        func control(
+            _ control: NSControl,
+            textView: NSTextView,
+            doCommandBy selector: Selector
+        ) -> Bool {
+            switch selector {
+            case #selector(NSResponder.insertNewline(_:)):
+                finish { self.onCommit(textView.string) }
+                return true
+            case #selector(NSResponder.cancelOperation(_:)):
+                finish { self.onCancel() }
+                return true
+            default:
+                return false
+            }
+        }
+
+        /// Clicking away commits, the way Finder and VS Code both behave.
+        func controlTextDidEndEditing(_ notification: Notification) {
+            guard let field = notification.object as? NSTextField else { return }
+            finish { self.onCommit(field.stringValue) }
+        }
+
+        private func finish(_ action: () -> Void) {
+            guard !finished else { return }
+            finished = true
+            action()
         }
     }
 }
@@ -526,7 +745,7 @@ private struct SearchResultRow: View {
 // MARK: - Models
 
 /// One entry (file or directory) directly inside a listed folder.
-private struct FileEntry: Identifiable, Hashable {
+struct FileEntry: Identifiable, Hashable {
     let url: URL
     let isDirectory: Bool
 
@@ -593,7 +812,7 @@ private extension URL {
 /// Off-main-thread filesystem access for the sidebar. Nothing here touches
 /// `@State`, so every function is safe to call from any actor context — the heavy
 /// lifting always happens inside a detached task.
-private enum FileSidebarScanner {
+enum FileSidebarScanner {
     /// Directory and file names that are always skipped, regardless of the
     /// hidden-file check — the classic "huge and irrelevant" folders that would
     /// otherwise stall a recursive search.
@@ -648,7 +867,9 @@ private enum FileSidebarScanner {
     /// updates incrementally instead of waiting for the whole walk to finish.
     /// Stops after `maxResults` matches or `maxDepth` levels of nesting, and
     /// cancels the underlying scan as soon as the stream is abandoned.
-    static func searchStream(
+    /// `fileprivate` rather than internal because `SearchResult` stays private to this
+    /// file — only the tree's listing API needs to be reachable from `FileTreeModel`.
+    fileprivate static func searchStream(
         query: String,
         under root: URL,
         maxResults: Int,
