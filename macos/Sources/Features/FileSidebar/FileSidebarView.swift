@@ -1,3 +1,4 @@
+import AppKit
 import Foundation
 import SwiftUI
 
@@ -12,6 +13,13 @@ struct FileSidebarView: View {
     let cwd: URL?
     let onOpenFile: (URL) -> Void
 
+    /// Inserts a row's path into the focused terminal instead of opening it. Fired by
+    /// ⌥-click and by the row's "Insert Path in Terminal" context-menu item. The sidebar
+    /// hands over the raw `URL` and nothing else: deciding relative-vs-absolute and
+    /// shell-escaping are terminal concerns, so `TerminalView` owns them — it is also the
+    /// only place that knows which surface is focused.
+    let onInsertPath: (URL) -> Void
+
     @State private var searchQuery = ""
     @State private var rootEntries: [FileEntry] = []
     @State private var isLoadingRoot = false
@@ -21,9 +29,14 @@ struct FileSidebarView: View {
     private static let maxSearchDepth = 8
     private static let searchDebounceMilliseconds = 150
 
-    init(cwd: URL?, onOpenFile: @escaping (URL) -> Void) {
+    init(
+        cwd: URL?,
+        onOpenFile: @escaping (URL) -> Void,
+        onInsertPath: @escaping (URL) -> Void
+    ) {
         self.cwd = cwd
         self.onOpenFile = onOpenFile
+        self.onInsertPath = onInsertPath
     }
 
     private var trimmedQuery: String {
@@ -145,7 +158,11 @@ struct FileSidebarView: View {
                     }
                 } else {
                     ForEach(rootEntries) { entry in
-                        FileTreeRow(entry: entry, depth: 0, onOpenFile: onOpenFile)
+                        FileTreeRow(
+                            entry: entry,
+                            depth: 0,
+                            onOpenFile: onOpenFile,
+                            onInsertPath: onInsertPath)
                     }
                 }
             }
@@ -166,7 +183,10 @@ struct FileSidebarView: View {
                         .padding(.top, 24)
                 } else {
                     ForEach(searchResults) { result in
-                        SearchResultRow(result: result, onOpenFile: onOpenFile)
+                        SearchResultRow(
+                            result: result,
+                            onOpenFile: onOpenFile,
+                            onInsertPath: onInsertPath)
                     }
                 }
             }
@@ -230,6 +250,7 @@ private struct FileTreeRow: View {
     let entry: FileEntry
     let depth: Int
     let onOpenFile: (URL) -> Void
+    let onInsertPath: (URL) -> Void
 
     @State private var isExpanded = false
     @State private var children: [FileEntry]?
@@ -238,6 +259,9 @@ private struct FileTreeRow: View {
 
     private static let indentWidth: CGFloat = 14
     private static let baseLeadingPadding: CGFloat = 6
+    private static let rowCornerRadius: CGFloat = 4
+    private static let dragPreviewHorizontalPadding: CGFloat = 8
+    private static let dragPreviewVerticalPadding: CGFloat = 4
 
     var body: some View {
         VStack(alignment: .leading, spacing: 1) {
@@ -283,14 +307,57 @@ private struct FileTreeRow: View {
             .padding(.trailing, 8)
             .padding(.vertical, 3)
             .frame(maxWidth: .infinity, alignment: .leading)
+            // Also the drag hit area: without it only the drawn glyphs would be draggable.
             .contentShape(Rectangle())
             .background(isHovering ? Color.secondary.opacity(0.12) : Color.clear)
-            .clipShape(RoundedRectangle(cornerRadius: 4))
+            .clipShape(RoundedRectangle(cornerRadius: Self.rowCornerRadius))
         }
         .buttonStyle(.plain)
+        // Publishes the row as a file URL so dropping it on a terminal surface takes the
+        // byte-for-byte same code path as dragging the file in from Finder.
+        //
+        // `NSItemProvider(object:)` on an `NSURL` registers exactly public.file-url and
+        // public.url. That is what makes the drop work: `SurfaceView.dropTypes` contains
+        // `.fileURL`, so `draggingEntered` accepts it and
+        // `NSPasteboard.getOpinionatedStringContents()` finds
+        // `item.propertyList(forType: .fileURL)` non-nil and runs it through
+        // `Ghostty.Shell.escape`. `NSItemProvider(contentsOf:)` would additionally register
+        // the file's own content UTI and eagerly load the whole file into the drag payload —
+        // and for directories its primary representation fails to load at all.
+        .onDrag {
+            NSItemProvider(object: entry.url as NSURL)
+        } preview: {
+            dragPreview
+        }
         .onHover { isHovering = $0 }
-        .help(entry.url.path)
+        .contextMenu {
+            Button("Insert Path in Terminal") { onInsertPath(entry.url) }
+            Button("Reveal in Finder") {
+                NSWorkspace.shared.activateFileViewerSelecting([entry.url])
+            }
+        }
+        // ⌥-click has no visual affordance, so the tooltip is where it gets taught.
+        .help("\(entry.url.path)\n⌥-click to insert this path into the terminal")
         .accessibilityLabel(entry.isDirectory ? "Folder, \(entry.name)" : "File, \(entry.name)")
+    }
+
+    /// Compact chip shown under the cursor during a drag. Without an explicit preview
+    /// SwiftUI snapshots the whole row, which is full sidebar width and reads as a smear.
+    private var dragPreview: some View {
+        HStack(spacing: 6) {
+            Image(systemName: entry.iconName)
+                .font(.system(size: 12))
+                .foregroundStyle(entry.iconColor)
+
+            Text(entry.name)
+                .font(.system(size: 12))
+                .lineLimit(1)
+        }
+        .padding(.horizontal, Self.dragPreviewHorizontalPadding)
+        .padding(.vertical, Self.dragPreviewVerticalPadding)
+        .background(
+            RoundedRectangle(cornerRadius: Self.rowCornerRadius)
+                .fill(Color.secondary.opacity(0.2)))
     }
 
     @ViewBuilder
@@ -305,15 +372,36 @@ private struct FileTreeRow: View {
             } else {
                 LazyVStack(alignment: .leading, spacing: 1) {
                     ForEach(children) { child in
-                        FileTreeRow(entry: child, depth: depth + 1, onOpenFile: onOpenFile)
+                        FileTreeRow(
+                            entry: child,
+                            depth: depth + 1,
+                            onOpenFile: onOpenFile,
+                            onInsertPath: onInsertPath)
                     }
                 }
             }
         }
     }
 
+    /// ⌥-click inserts the row's path into the focused terminal instead of opening it.
+    ///
+    /// Option was chosen because it is the only purely additive option: it needs no extra row
+    /// chrome, and a plain click keeps its exact existing meaning. A hover-revealed button
+    /// would have to live outside this `Button` (on macOS the outer button swallows clicks on
+    /// nested ones), which means restructuring the row. Double-click is out because SwiftUI
+    /// delivers it as two single clicks, so the first one would already have opened the pane.
+    /// The context menu mirrors the action for discoverability.
+    ///
+    /// `NSEvent.modifierFlags` reports the *current* modifier state, which is accurate here:
+    /// SwiftUI runs a `Button` action synchronously on mouse-up while the key is still held,
+    /// and it exposes no way to read the event that triggered the button.
     @MainActor
     private func handleTap() {
+        if NSEvent.modifierFlags.contains(.option) {
+            onInsertPath(entry.url)
+            return
+        }
+
         guard entry.isDirectory else {
             onOpenFile(entry.url)
             return
@@ -338,13 +426,16 @@ private struct FileTreeRow: View {
 private struct SearchResultRow: View {
     let result: SearchResult
     let onOpenFile: (URL) -> Void
+    let onInsertPath: (URL) -> Void
 
     @State private var isHovering = false
 
+    private static let rowCornerRadius: CGFloat = 4
+    private static let dragPreviewHorizontalPadding: CGFloat = 8
+    private static let dragPreviewVerticalPadding: CGFloat = 4
+
     var body: some View {
-        Button {
-            onOpenFile(result.url)
-        } label: {
+        Button(action: handleTap) {
             HStack(spacing: 6) {
                 Image(systemName: result.url.fileIconName)
                     .font(.system(size: 12))
@@ -375,15 +466,60 @@ private struct SearchResultRow: View {
             .frame(maxWidth: .infinity, alignment: .leading)
             .contentShape(Rectangle())
             .background(isHovering ? Color.secondary.opacity(0.12) : Color.clear)
-            .clipShape(RoundedRectangle(cornerRadius: 4))
+            .clipShape(RoundedRectangle(cornerRadius: Self.rowCornerRadius))
         }
         .buttonStyle(.plain)
+        // Same payload as FileTreeRow — see the comment there for why NSURL is used and
+        // not NSItemProvider(contentsOf:).
+        .onDrag {
+            NSItemProvider(object: result.url as NSURL)
+        } preview: {
+            dragPreview
+        }
         .onHover { isHovering = $0 }
-        .help(result.url.path)
+        .contextMenu {
+            Button("Insert Path in Terminal") { onInsertPath(result.url) }
+            Button("Reveal in Finder") {
+                NSWorkspace.shared.activateFileViewerSelecting([result.url])
+            }
+        }
+        .help("\(result.url.path)\n⌥-click to insert this path into the terminal")
         .accessibilityLabel(
             "File, \(result.name), in " +
             (result.relativeDirectory.isEmpty ? "current folder" : result.relativeDirectory)
         )
+    }
+
+    /// Compact chip shown under the cursor during a drag — see `FileTreeRow.dragPreview`
+    /// for why an explicit preview beats the default full-width row snapshot.
+    private var dragPreview: some View {
+        HStack(spacing: 6) {
+            Image(systemName: result.url.fileIconName)
+                .font(.system(size: 12))
+                .foregroundStyle(result.url.isMarkdownFile ? Color.accentColor : .secondary)
+
+            Text(result.name)
+                .font(.system(size: 12))
+                .lineLimit(1)
+        }
+        .padding(.horizontal, Self.dragPreviewHorizontalPadding)
+        .padding(.vertical, Self.dragPreviewVerticalPadding)
+        .background(
+            RoundedRectangle(cornerRadius: Self.rowCornerRadius)
+                .fill(Color.secondary.opacity(0.2)))
+    }
+
+    /// ⌥-click inserts the row's path into the terminal instead of opening the file — the
+    /// same contract as `FileTreeRow.handleTap`, which documents why the modifier is read
+    /// from `NSEvent`. Search results are always files, so there is no expand branch here.
+    @MainActor
+    private func handleTap() {
+        if NSEvent.modifierFlags.contains(.option) {
+            onInsertPath(result.url)
+            return
+        }
+
+        onOpenFile(result.url)
     }
 }
 
@@ -589,11 +725,17 @@ private struct SearchWalkContext {
 struct FileSidebarView_Previews: PreviewProvider {
     static var previews: some View {
         Group {
-            FileSidebarView(cwd: FileManager.default.homeDirectoryForCurrentUser) { _ in }
+            FileSidebarView(
+                cwd: FileManager.default.homeDirectoryForCurrentUser,
+                onOpenFile: { _ in },
+                onInsertPath: { _ in })
                 .frame(width: 260, height: 480)
                 .previewDisplayName("With Directory")
 
-            FileSidebarView(cwd: nil) { _ in }
+            FileSidebarView(
+                cwd: nil,
+                onOpenFile: { _ in },
+                onInsertPath: { _ in })
                 .frame(width: 260, height: 480)
                 .previewDisplayName("No Directory")
         }

@@ -33,3 +33,7 @@ vgcore.*
 # Wisp local artifacts
 /PROJECT_LOG.md
 /default.profraw
+
+# claude-agents: per-developer plugin profile (do not commit)
+.claude/settings.local.json
+/WISP_ROADMAP.md

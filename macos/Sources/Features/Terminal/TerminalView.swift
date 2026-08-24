@@ -144,6 +144,50 @@ struct TerminalView<ViewModel: TerminalViewModel>: View {
         gitMonitor.refreshSoon()
     }
 
+    /// Types a filesystem path picked in the sidebar into the focused terminal at the cursor
+    /// and stops there — no return is sent, so the user still composes the command around it.
+    /// Paths living under the current working directory go in relative to it (shorter, and
+    /// what a person would actually have typed); anything else goes in absolute.
+    ///
+    /// Escaping goes through `Ghostty.Shell.escape`, the same escaper the Finder-drag drop
+    /// path uses in `NSPasteboard.getOpinionatedStringContents()`, so a row that is dragged
+    /// onto the surface and a row that is ⌥-clicked are escaped identically.
+    private func insertPathInTerminal(_ url: URL) {
+        guard let surfaceView = lastFocusedSurface?.value ?? focusedSurface else { return }
+
+        let path = Self.terminalPath(for: url, relativeTo: lastKnownPwd ?? pwdURL)
+        surfaceView.surfaceModel?.sendText(Ghostty.Shell.escape(path) + " ")
+
+        // Text sent to a surface that isn't first responder lands correctly but leaves the
+        // caret in the sidebar, so the next keystroke would go to the filter field. Same
+        // restore trick — and same reason it has to be deferred — as the command palette:
+        // we're on a user-interactive thread here and AppKit wants this on the main queue.
+        DispatchQueue.main.async {
+            surfaceView.window?.makeFirstResponder(surfaceView)
+        }
+    }
+
+    /// The literal text to type for `url`: relative to `base` when it sits underneath it,
+    /// absolute otherwise.
+    ///
+    /// A relative path starting with `-` or `~` gets an explicit `./` prefix.
+    /// `Ghostty.Shell.escape` escapes `\ ()[]{}<>"'`!#$&;|*?` and tab but deliberately not
+    /// those two, so without the prefix the shell would read the path as an option flag or
+    /// as a home-directory expansion.
+    private static func terminalPath(for url: URL, relativeTo base: URL?) -> String {
+        let absolute = url.standardizedFileURL.path
+        guard let base else { return absolute }
+
+        // A cwd of "/" would make the prefix test "//" and isn't worth relativizing anyway.
+        let basePath = base.standardizedFileURL.path
+        guard basePath != "/", absolute.hasPrefix(basePath + "/") else { return absolute }
+
+        let relative = String(absolute.dropFirst(basePath.count + 1))
+        guard !relative.isEmpty else { return absolute }
+        guard relative.hasPrefix("-") || relative.hasPrefix("~") else { return relative }
+        return "./" + relative
+    }
+
     var body: some View {
         switch ghostty.readiness {
         case .loading:
@@ -156,8 +200,9 @@ struct TerminalView<ViewModel: TerminalViewModel>: View {
                     // Warp-style file-explorer sidebar for the focused terminal's cwd.
                     if showSidebar {
                         FileSidebarView(
-                            cwd: lastKnownPwd ?? pwdURL
-                        ) { openInPane($0) }
+                            cwd: lastKnownPwd ?? pwdURL,
+                            onOpenFile: { openInPane($0) },
+                            onInsertPath: { insertPathInTerminal($0) })
                             .frame(width: effectiveSidebarWidth)
                             .transition(.move(edge: .leading).combined(with: .opacity))
                         SidebarResizeHandle(
