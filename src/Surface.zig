@@ -5017,6 +5017,28 @@ pub fn performBindingAction(self: *Surface, action: input.Binding.Action) !bool 
             return false;
         },
 
+        .copy_last_command_output => |format| {
+            self.renderer_state.mutex.lock();
+            defer self.renderer_state.mutex.unlock();
+
+            // The selection is formatted against `screens.active`, so it
+            // has to be resolved there too. On the alternate screen there
+            // are no prompt marks and this correctly finds nothing.
+            const sel = self.io.terminal.screens.active.selectLastOutput() orelse
+                return false;
+
+            // Deliberately not routed through setSelection: this is a
+            // "copy without disturbing my selection" action, so it is safe
+            // to invoke from a menu at any time.
+            try self.copySelectionToClipboards(
+                sel,
+                &.{.standard},
+                format,
+            );
+
+            return true;
+        },
+
         .copy_url_to_clipboard => {
             // If the mouse isn't over a link, nothing we can do.
             if (!self.mouse.over_link) return false;

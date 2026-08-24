@@ -385,6 +385,19 @@ pub const Action = union(enum) {
     /// set or is empty this has no effect.
     copy_title_to_clipboard,
 
+    /// Copy the output of the last command that ran to the default
+    /// clipboard, leaving any existing text selection untouched.
+    ///
+    /// The bounds of the output come from OSC 133 semantic prompt marks, so
+    /// this requires shell integration. The copied text stops at the end of
+    /// the command's output and never includes the following prompt line.
+    /// If the last command printed nothing, or the terminal is on the
+    /// alternate screen, this does nothing and reports failure.
+    ///
+    /// Takes the same optional format parameter as `copy_to_clipboard`,
+    /// defaulting to `mixed`.
+    copy_last_command_output: CopyToClipboard,
+
     /// Increase the font size by the specified amount in points (pt).
     ///
     /// For example, `increase_font_size:1.5` will increase the font size
@@ -1362,6 +1375,7 @@ pub const Action = union(enum) {
             .copy_to_clipboard,
             .copy_url_to_clipboard,
             .copy_title_to_clipboard,
+            .copy_last_command_output,
             .paste_from_clipboard,
             .paste_from_selection,
             .increase_font_size,

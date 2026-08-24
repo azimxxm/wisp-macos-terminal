@@ -234,6 +234,7 @@ class AppDelegate: NSObject,
 
         // Add the Wisp "Toggle Git Bar" item to the View menu.
         installGitBarMenuItem()
+        installCopyLastCommandOutputMenuItem()
 
         // Add the Wisp "Welcome to Wisp" item to the Help menu and show it on first launch.
         installWelcomeMenuItem()
@@ -990,6 +991,31 @@ class AppDelegate: NSObject,
         item.keyEquivalentModifierMask = [.command, .option]
         item.target = self
         viewMenu.addItem(item)
+    }
+
+    /// Adds a "Copy Last Command Output" item (⌘⌥C) to the Edit menu at runtime, kept in
+    /// code alongside the surface action it targets rather than in MainMenu.xib.
+    ///
+    /// The item is given no explicit target so it travels the responder chain down to the
+    /// focused terminal surface — the same nil-target dispatch MainMenu.xib uses for its
+    /// Copy and Paste items, which are wired to First Responder.
+    private func installCopyLastCommandOutputMenuItem() {
+        guard let editMenu = NSApp.mainMenu?.item(withTitle: "Edit")?.submenu else { return }
+
+        let item = NSMenuItem(
+            title: "Copy Last Command Output",
+            action: #selector(Ghostty.SurfaceView.wispCopyLastCommandOutput(_:)),
+            keyEquivalent: "c")
+        item.keyEquivalentModifierMask = [.command, .option]
+
+        // Sit directly under "Copy". A -1 index means the xib no longer has that item, in
+        // which case appending is a better outcome than an out-of-range crash at launch.
+        let copyIndex = editMenu.indexOfItem(withTarget: nil, andAction: #selector(NSText.copy(_:)))
+        if copyIndex >= 0 {
+            editMenu.insertItem(item, at: copyIndex + 1)
+        } else {
+            editMenu.addItem(item)
+        }
     }
 
     /// Adds a "Welcome to Wisp" item to the Help menu so the first-launch welcome screen can be

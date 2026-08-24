@@ -3165,6 +3165,75 @@ pub fn selectOutput(self: *Screen, pin: Pin) ?Selection {
     return .init(hl.start, hl.end, false);
 }
 
+/// Select the output of the most recently run command, as delimited by the
+/// OSC 133 semantic prompt marks emitted by shell integration.
+///
+/// "Most recent" is resolved from the bottom of the screen rather than from
+/// the viewport, so the result is the same whether or not the user has
+/// scrolled away from the prompt.
+///
+/// The returned selection can never run on into the shell prompt that
+/// follows the output. Two independent bounds guarantee it:
+///
+///   1. We stop the backwards scan at the prompt that launched the last
+///      command, so we only ever look inside that command's zone.
+///   2. `selectOutput` delegates to `PageList.highlightSemanticContent`,
+///      which clamps its end to the row above the *next* prompt row and
+///      stops extending the moment it sees a cell whose semantic content is
+///      `.prompt` or `.input`.
+///
+/// Only OSC 133 C and D put the cursor into `.output`, and A/P/B/I put it
+/// into `.prompt`/`.input`. We never store a distinct "D" marker, so "stop
+/// at D" is realized as "stop at the last `.output` cell that has text".
+/// Every shipped shell integration emits D immediately before the next A,
+/// so the two coincide.
+///
+/// Returns null when shell integration never marked a prompt, when the
+/// screen has no prompts, or when the last command produced no output at
+/// all (`cd`, for example). Callers should treat null as "nothing to copy"
+/// rather than silently falling back to an older command.
+pub fn selectLastOutput(self: *Screen) ?Selection {
+    // Semantic content operations walk the entire PageList when no prompt
+    // was ever marked, so bail out before paying for that. This also means
+    // the alternate screen (vim, less) correctly does nothing.
+    if (!self.semantic_prompt.seen) return null;
+
+    const bottom = self.pages.getBottomRight(.screen) orelse return null;
+
+    // The last command's output lives between the last two prompts: the
+    // prompt that launched it and the prompt that came back afterwards.
+    //
+    // When only one prompt exists we bound at that prompt rather than at
+    // the top of the screen. Two very different states produce a single
+    // prompt and the fallback has to be right for both:
+    //
+    //   - A command is still running, so the returning prompt hasn't been
+    //     printed yet. Its output is BELOW the prompt, so bounding here
+    //     still finds it.
+    //   - A brand new shell that has run nothing. Everything above the
+    //     prompt is the login banner, which is `.output` with text purely
+    //     because that is the default for unmarked cells. Bounding at the
+    //     prompt is what stops us from handing the user their MOTD when
+    //     they asked for a command's output.
+    var prompt_it = bottom.promptIterator(.left_up, null);
+    const last_prompt: Pin = prompt_it.next() orelse return null;
+    const limit: Pin = prompt_it.next() orelse last_prompt;
+
+    // Walk backwards for the last cell that actually holds output. Blank
+    // cells default to `.output`, so the trailing empty rows underneath the
+    // prompt have to be skipped explicitly or they'd be mistaken for the
+    // last command.
+    var cell_it = bottom.cellIterator(.left_up, limit);
+    while (cell_it.next()) |p| {
+        const cell = p.rowAndCell().cell;
+        if (cell.semantic_content != .output) continue;
+        if (!cell.hasText()) continue;
+        return self.selectOutput(p);
+    }
+
+    return null;
+}
+
 pub const LineIterator = struct {
     screen: *const Screen,
     current: ?Pin = null,
@@ -9520,6 +9589,91 @@ test "Screen: selectOutput" {
             .y = 8,
         } }).?) == null);
     }
+}
+
+test "Screen: selectLastOutput picks the most recent command" {
+    const testing = std.testing;
+    const alloc = testing.allocator;
+
+    var s = try init(alloc, .{ .cols = 10, .rows = 15, .max_scrollback = 0 });
+    defer s.deinit();
+
+    s.cursorSetSemanticContent(.{ .prompt = .initial });
+    try s.testWriteString("$ ");
+    s.cursorSetSemanticContent(.{ .input = .clear_explicit });
+    try s.testWriteString("first\n");
+    s.cursorSetSemanticContent(.output);
+    try s.testWriteString("older\n");
+    s.cursorSetSemanticContent(.{ .prompt = .initial });
+    try s.testWriteString("$ ");
+    s.cursorSetSemanticContent(.{ .input = .clear_explicit });
+    try s.testWriteString("second\n");
+    s.cursorSetSemanticContent(.output);
+    try s.testWriteString("newer\n");
+    s.cursorSetSemanticContent(.{ .prompt = .initial });
+    try s.testWriteString("$ ");
+
+    var sel = s.selectLastOutput().?;
+    defer sel.deinit(&s);
+    const contents = try s.selectionString(alloc, .{ .sel = sel, .trim = false });
+    defer alloc.free(contents);
+    // Only the newest command's output, and no trailing prompt line.
+    try testing.expectEqualStrings("newer", contents);
+}
+
+test "Screen: selectLastOutput ignores output above the only prompt" {
+    const testing = std.testing;
+    const alloc = testing.allocator;
+
+    var s = try init(alloc, .{ .cols = 10, .rows = 15, .max_scrollback = 0 });
+    defer s.deinit();
+
+    // A brand new shell. The login banner is printed before shell integration
+    // emits its first OSC 133 A, so those cells are `.output` with text even
+    // though they belong to no command. Asking for the last command's output
+    // here must report "nothing to copy" rather than handing back the banner.
+    try s.testWriteString("motd\n");
+    s.cursorSetSemanticContent(.{ .prompt = .initial });
+    try s.testWriteString("$ ");
+
+    try testing.expect(s.selectLastOutput() == null);
+}
+
+test "Screen: selectLastOutput while a command is still running" {
+    const testing = std.testing;
+    const alloc = testing.allocator;
+
+    var s = try init(alloc, .{ .cols = 10, .rows = 15, .max_scrollback = 0 });
+    defer s.deinit();
+
+    // Only the launching prompt exists because the command hasn't finished.
+    // Its partial output is still the last command's output.
+    s.cursorSetSemanticContent(.{ .prompt = .initial });
+    try s.testWriteString("$ ");
+    s.cursorSetSemanticContent(.{ .input = .clear_explicit });
+    try s.testWriteString("make\n");
+    s.cursorSetSemanticContent(.output);
+    try s.testWriteString("building");
+
+    var sel = s.selectLastOutput().?;
+    defer sel.deinit(&s);
+    const contents = try s.selectionString(alloc, .{ .sel = sel, .trim = false });
+    defer alloc.free(contents);
+    try testing.expectEqualStrings("building", contents);
+}
+
+test "Screen: selectLastOutput without shell integration" {
+    const testing = std.testing;
+    const alloc = testing.allocator;
+
+    var s = try init(alloc, .{ .cols = 10, .rows = 15, .max_scrollback = 0 });
+    defer s.deinit();
+
+    // No OSC 133 marks were ever emitted, so there is nothing to bound a
+    // command's output with.
+    try s.testWriteString("plain output\n");
+
+    try testing.expect(s.selectLastOutput() == null);
 }
 
 test "Screen: selectionString basic" {

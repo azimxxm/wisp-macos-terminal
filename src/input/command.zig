@@ -171,6 +171,12 @@ fn actionCommands(action: Action.Key) []const Command {
             .description = "Copy the terminal title to the clipboard. If the terminal title is not set this has no effect.",
         }},
 
+        .copy_last_command_output => comptime &.{.{
+            .action = .{ .copy_last_command_output = .mixed },
+            .title = "Copy Last Command Output",
+            .description = "Copy the output of the last command that ran to the clipboard. Requires shell integration.",
+        }},
+
         .paste_from_clipboard => comptime &.{.{
             .action = .paste_from_clipboard,
             .title = "Paste from Clipboard",

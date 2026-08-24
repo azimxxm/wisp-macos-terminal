@@ -1681,6 +1681,14 @@ extension Ghostty {
                     keyEquivalent: "")
                 item.setImageIfDesired(systemSymbolName: "doc.richtext")
             }
+            // Warp-style: the last command's output needs no selection at all — the core
+            // derives the range from the OSC 133 marks — so this is always offered.
+            item = menu.addItem(
+                withTitle: "Copy Last Command Output",
+                action: #selector(wispCopyLastCommandOutput(_:)),
+                keyEquivalent: "")
+            item.setImageIfDesired(systemSymbolName: "list.clipboard")
+
             menu.addItem(withTitle: "Paste", action: #selector(paste(_:)), keyEquivalent: "")
 
             menu.addItem(.separator())
@@ -1752,6 +1760,23 @@ extension Ghostty {
             guard let url = sender.representedObject as? URL else { return }
             NSPasteboard.general.clearContents()
             NSPasteboard.general.setString(url.path, forType: .string)
+        }
+
+        /// Copies the output of the last command that ran, using the OSC 133 semantic
+        /// prompt marks the shell integration emits.
+        ///
+        /// The core resolves the range so the copied text stops at the end of the command
+        /// output and never picks up the following prompt line. A `false` return means
+        /// there were no prompt marks (no shell integration, or an alternate-screen app
+        /// like vim is running) or the last command printed nothing, so we beep rather
+        /// than silently doing nothing.
+        @IBAction func wispCopyLastCommandOutput(_ sender: Any?) {
+            guard let surface = self.surface else { return }
+            let action = "copy_last_command_output"
+            if !ghostty_surface_binding_action(surface, action, UInt(action.lengthOfBytes(using: .utf8))) {
+                NSSound.beep()
+                AppDelegate.logger.warning("action failed action=\(action, privacy: .public)")
+            }
         }
 
         @IBAction func copy(_ sender: Any?) {
@@ -2359,6 +2384,11 @@ extension Ghostty.SurfaceView: NSMenuItemValidation {
         case #selector(toggleReadonly):
             item.state = readonly ? .on : .off
             return true
+
+        case #selector(wispCopyLastCommandOutput(_:)):
+            // Asking the core whether a last command exists would mean performing the whole
+            // search on every menu update, so we stay enabled and beep on a miss.
+            return surface != nil
 
         case #selector(copy(_:)):
             // We only enable copy menu item when there're actual selected text
