@@ -37,3 +37,4 @@ vgcore.*
 # claude-agents: per-developer plugin profile (do not commit)
 .claude/settings.local.json
 /WISP_ROADMAP.md
+/WISP_TEST_CHECKLIST.md
