@@ -2399,7 +2399,14 @@ extension Ghostty.SurfaceView {
     override func performDragOperation(_ sender: any NSDraggingInfo) -> Bool {
         let pb = sender.draggingPasteboard
 
-        let content = pb.getOpinionatedStringContents()
+        // Drops go through Wisp's own quoting/separator preferences instead of
+        // `getOpinionatedStringContents()`. That helper is shared with the three paste paths
+        // and must keep upstream's space-joined, backslash-escaped semantics, so the policy
+        // split lives here at the drop seam rather than inside the pasteboard helper.
+        // See Features/Settings/DragDropSettingsView.swift.
+        let content = pb.getDropStringContents(
+            quoting: WispDragDropDefaults.quoting,
+            separator: WispDragDropDefaults.separator)
 
         if let content {
             DispatchQueue.main.async {

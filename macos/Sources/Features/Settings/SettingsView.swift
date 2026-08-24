@@ -36,6 +36,8 @@ struct SettingsView: View {
                     ThemeGalleryView(model: model)
                 case .notifications:
                     NotificationSettingsView()
+                case .dragDrop:
+                    DragDropSettingsView()
                 case .claude:
                     ClaudePanelView()
                 }
@@ -71,6 +73,7 @@ enum SettingsSection: String, CaseIterable, Identifiable {
     case appearance
     case themes
     case notifications
+    case dragDrop
     case claude
 
     var id: String { rawValue }
@@ -80,6 +83,7 @@ enum SettingsSection: String, CaseIterable, Identifiable {
         case .appearance: return "Appearance"
         case .themes: return "Themes"
         case .notifications: return "Notifications"
+        case .dragDrop: return "Drag & Drop"
         case .claude: return "Claude"
         }
     }
@@ -89,6 +93,7 @@ enum SettingsSection: String, CaseIterable, Identifiable {
         case .appearance: return "paintbrush.fill"
         case .themes: return "paintpalette.fill"
         case .notifications: return "bell.badge.fill"
+        case .dragDrop: return "hand.draw.fill"
         case .claude: return "sparkles"
         }
     }
@@ -99,6 +104,7 @@ enum SettingsSection: String, CaseIterable, Identifiable {
         case .appearance: return .blue
         case .themes: return .pink
         case .notifications: return .orange
+        case .dragDrop: return .teal
         case .claude: return .purple
         }
     }
