@@ -28,7 +28,14 @@ struct MarkdownPaneView: View {
         static let headerIconCornerRadius: CGFloat = 5
         static let headerHorizontalPadding: CGFloat = 12
         static let headerVerticalPadding: CGFloat = 8
+        static let copyPillHorizontalPadding: CGFloat = 10
+        static let copyPillVerticalPadding: CGFloat = 5
+        static let copyPillBottomInset: CGFloat = 16
     }
+
+    /// How long the copy confirmation stays on screen. Long enough to register, short
+    /// enough that it is gone before the user reaches the terminal to paste.
+    private static let copyConfirmationDuration: Duration = .milliseconds(1400)
 
     @State private var mode: ViewMode = .rendered
     /// The document's current text. This is the single source of truth for both the
@@ -43,6 +50,14 @@ struct MarkdownPaneView: View {
     @State private var isFindHovered = false
     /// Bridges the header's Find button to the raw editor's native AppKit find/replace bar.
     @State private var findController = RawEditorFindController()
+
+    /// Drives the transient "Copied" pill. The preview is a JavaScript-free `WKWebView`
+    /// and cannot draw its own feedback, so this overlay is the only acknowledgement a
+    /// Copy click can produce.
+    @State private var showCopyConfirmation = false
+    /// Auto-dismiss timer for `showCopyConfirmation`, cancelled and restarted on every
+    /// copy so two quick copies keep the pill up instead of hiding it early.
+    @State private var copyResetTask: Task<Void, Never>?
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
@@ -173,15 +188,67 @@ struct MarkdownPaneView: View {
     private var content: some View {
         switch mode {
         case .rendered:
-            // Re-rendered from the live `text` state every time this branch is drawn, so
-            // it always reflects whatever was last typed in Raw mode.
-            MarkdownHTMLView(html: MarkdownRenderer.renderHTML(from: text))
+            renderedPreview
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
         case .raw:
             MarkdownRawEditor(text: $text, findController: findController) {
                 isModified = true
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
+        }
+    }
+
+    /// The HTML preview plus its copy-confirmation overlay.
+    ///
+    /// Re-rendered from the live `text` state every time this is drawn, so it always
+    /// reflects whatever was last typed in Raw mode. The raw fence sources travel out of
+    /// the renderer alongside the HTML because the preview runs with
+    /// `allowsContentJavaScript = false` and so cannot read its own DOM to serve a Copy
+    /// button — see ``MarkdownRenderer/Rendered``.
+    private var renderedPreview: some View {
+        let rendered = MarkdownRenderer.renderHTML(from: text)
+        return MarkdownHTMLView(html: rendered.html, codeBlocks: rendered.codeBlocks) {
+            confirmCopy()
+        }
+        .overlay(alignment: .bottom) {
+            if showCopyConfirmation {
+                copyConfirmationPill
+            }
+        }
+    }
+
+    /// Transient confirmation that a fenced block's source reached the pasteboard. Never
+    /// takes hit-testing, so it cannot block a click on the code underneath it.
+    private var copyConfirmationPill: some View {
+        HStack(spacing: 5) {
+            Image(systemName: "checkmark")
+            Text("Copied")
+        }
+        .font(.system(size: 11, weight: .medium))
+        .padding(.horizontal, Layout.copyPillHorizontalPadding)
+        .padding(.vertical, Layout.copyPillVerticalPadding)
+        .background(.ultraThinMaterial, in: Capsule())
+        .overlay(Capsule().strokeBorder(Color.primary.opacity(0.12)))
+        .padding(.bottom, Layout.copyPillBottomInset)
+        .transition(.opacity.combined(with: .scale(scale: 0.95)))
+        .allowsHitTesting(false)
+        .accessibilityLabel("Copied to clipboard")
+    }
+
+    /// Called from ``MarkdownHTMLView`` right after a fenced block's source lands on the
+    /// pasteboard. Restarts the dismiss timer on every copy.
+    @MainActor
+    private func confirmCopy() {
+        copyResetTask?.cancel()
+        withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.18)) {
+            showCopyConfirmation = true
+        }
+        copyResetTask = Task {
+            try? await Task.sleep(for: Self.copyConfirmationDuration)
+            guard !Task.isCancelled else { return }
+            withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.18)) {
+                showCopyConfirmation = false
+            }
         }
     }
 
@@ -241,10 +308,18 @@ struct MarkdownPaneView: View {
 
 /// Renders a fully-formed, self-contained HTML document (see ``MarkdownRenderer``) inside
 /// a `WKWebView`. Never loads remote content: `loadHTMLString` is always called with a
-/// `nil` base URL, JavaScript execution is disabled, and any link click is intercepted so
-/// it opens in the user's default browser instead of navigating the pane away.
+/// `nil` base URL, JavaScript execution is disabled, and every navigation is intercepted —
+/// `wisp-copy:` links copy a fenced block's source, ordinary links open in the user's
+/// default browser, and the pane itself never navigates away.
 private struct MarkdownHTMLView: NSViewRepresentable {
     let html: String
+    /// Raw source of every fenced code block, indexed by the `wisp-copy:<index>` links
+    /// embedded in `html`. Held Swift-side because a JavaScript-free page can neither read
+    /// its own DOM nor write to the pasteboard.
+    let codeBlocks: [String]
+    /// Invoked on the main actor right after a block's source lands on the pasteboard, so
+    /// the pane can show a confirmation the page itself is incapable of drawing.
+    let onCopy: () -> Void
 
     func makeCoordinator() -> Coordinator {
         Coordinator()
@@ -253,6 +328,10 @@ private struct MarkdownHTMLView: NSViewRepresentable {
     func makeNSView(context: Context) -> WKWebView {
         let configuration = WKWebViewConfiguration()
         configuration.defaultWebpagePreferences.allowsContentJavaScript = false
+        // Off by default on macOS unless the user has enabled Full Keyboard Access. Turning
+        // it on is what lets Tab reach the CSS-only Copy affordance, which is otherwise
+        // mouse-only. Cost: Tab also cycles ordinary markdown links before leaving the view.
+        configuration.preferences.tabFocusesLinks = true
 
         let webView = WKWebView(frame: .zero, configuration: configuration)
         webView.navigationDelegate = context.coordinator
@@ -260,33 +339,92 @@ private struct MarkdownHTMLView: NSViewRepresentable {
     }
 
     func updateNSView(_ webView: WKWebView, context: Context) {
+        // Always refreshed: SwiftUI hands us a new closure (capturing the current @State
+        // box) on every pass, and the coordinator outlives all of them.
+        context.coordinator.onCopy = onCopy
+
         // Guard against redundant reloads: SwiftUI calls `updateNSView` on every render
         // pass of the parent, not just when `html` actually changes, and reloading an
         // unchanged document would flash the page and reset scroll position.
         guard context.coordinator.lastLoadedHTML != html else { return }
         context.coordinator.lastLoadedHTML = html
+        // Updated only alongside the HTML. `escapeHTML` is injective, so identical HTML
+        // implies identical raw fences — which is what keeps a `wisp-copy:` index and the
+        // document it was minted for from ever drifting apart.
+        context.coordinator.codeBlocks = codeBlocks
         webView.loadHTMLString(html, baseURL: nil)
     }
 
     final class Coordinator: NSObject, WKNavigationDelegate {
         var lastLoadedHTML: String?
+        var codeBlocks: [String] = []
+        var onCopy: () -> Void = {}
 
-        /// Cancels any navigation triggered by clicking a link inside the rendered
-        /// preview and opens it in the user's default browser instead — the preview
-        /// itself must never navigate away from the markdown it was given.
+        /// Handles the two kinds of navigation the preview can produce: a `wisp-copy:` link
+        /// (copy the block's source, stay put) and an ordinary link (open in the user's
+        /// default browser, stay put). The preview itself must never navigate away from the
+        /// markdown it was given.
         func webView(
             _ webView: WKWebView,
             decidePolicyFor navigationAction: WKNavigationAction,
             decisionHandler: @escaping (WKNavigationActionPolicy) -> Void
         ) {
+            let url = navigationAction.request.url
+
+            // Branched on the *scheme*, before the navigation-type guard below, and always
+            // cancelling — never on a successful payload lookup. Two failure modes this
+            // shape rules out:
+            //
+            // * If WebKit ever classified a Copy click as something other than
+            //   `.linkActivated`, the guard below would `.allow` it, WebKit would fail to
+            //   load an unregistered scheme, and the preview would be replaced by a failed
+            //   provisional navigation.
+            // * If the payload does not resolve — a stale index, or an `absoluteString`
+            //   shape we did not anticipate — falling through would hand `wisp-copy:…` to
+            //   `NSWorkspace`, which has no registered handler and would put a system alert
+            //   on screen. Doing nothing is the only acceptable failure mode here.
+            if let url, url.scheme == MarkdownRenderer.copyScheme {
+                if let code = copyPayload(for: url) {
+                    let pasteboard = NSPasteboard.general
+                    pasteboard.clearContents()
+                    pasteboard.setString(code, forType: .string)
+                    onCopy()
+                }
+                decisionHandler(.cancel)
+                return
+            }
+
             guard navigationAction.navigationType == .linkActivated else {
                 decisionHandler(.allow)
                 return
             }
-            if let url = navigationAction.request.url {
+            if let url {
                 NSWorkspace.shared.open(url)
             }
             decisionHandler(.cancel)
+        }
+
+        /// Resolves a `wisp-copy:<index>` URL to the raw source of that fenced block, or
+        /// `nil` if the index is malformed or out of range.
+        ///
+        /// Parsed by stripping the scheme prefix off `absoluteString`, **not** via
+        /// `url.host` or `url.path`. `wisp-copy:3` has no `//` authority, so it is an
+        /// opaque URI: WebKit hands the delegate an `NSURL` whose `host` is `nil` *and*
+        /// whose `path` is the empty string, while standalone
+        /// `URL(string: "wisp-copy:3")?.path` returns `"3"`. A unit test written against
+        /// `URL(string:)` would therefore pass while the app failed. Prefix-stripping the
+        /// absolute string is the one reading both agree on.
+        ///
+        /// The pasteboard is only cleared once this returns a value, so a malformed href
+        /// can never destroy whatever the user already had on the clipboard.
+        private func copyPayload(for url: URL) -> String? {
+            let prefix = "\(MarkdownRenderer.copyScheme):"
+            let absolute = url.absoluteString
+            guard absolute.hasPrefix(prefix),
+                  let index = Int(absolute.dropFirst(prefix.count)),
+                  codeBlocks.indices.contains(index)
+            else { return nil }
+            return codeBlocks[index]
         }
     }
 }
@@ -412,8 +550,33 @@ private struct MarkdownRawEditor: NSViewRepresentable {
 /// renderer is safe to point at an untrusted `.md` file: it can never inject a live
 /// `<script>`, and link `href`s are scheme-checked (see `sanitizedHref`).
 private enum MarkdownRenderer {
-    static func renderHTML(from markdown: String) -> String {
-        wrapDocument(body: renderBody(markdown))
+
+    // MARK: Output
+
+    /// A rendered document plus the *raw* (pre-escape, pre-HTML) source of every fenced
+    /// code block, in document order.
+    ///
+    /// The raw text has to travel out of the renderer because the preview runs with
+    /// `allowsContentJavaScript = false`: the page can neither read its own DOM nor reach
+    /// the clipboard, so per-block "Copy" is served from Swift with the block's index as
+    /// the only key the two sides share. Copying from the source rather than the DOM is
+    /// also what keeps blank lines and entity-escaped characters intact.
+    struct Rendered {
+        let html: String
+        /// Indexed by the integer in each `wisp-copy:<index>` href embedded in `html`.
+        let codeBlocks: [String]
+    }
+
+    /// Scheme of the per-block Copy links. Nothing is registered to handle it — it exists
+    /// purely so ``MarkdownHTMLView/Coordinator`` can recognise the click, cancel the
+    /// navigation, and copy Swift-side. `sanitizedHref` rejects this scheme, so a hostile
+    /// `.md` file cannot forge one of these links.
+    static let copyScheme = "wisp-copy"
+
+    static func renderHTML(from markdown: String) -> Rendered {
+        var codeBlocks: [String] = []
+        let body = renderBody(markdown, codeBlocks: &codeBlocks)
+        return Rendered(html: wrapDocument(body: body), codeBlocks: codeBlocks)
     }
 
     // MARK: Block-level parsing
@@ -421,7 +584,7 @@ private enum MarkdownRenderer {
     /// Walks the document line by line. Each branch consumes one or more lines that make
     /// up a single block (a fenced code block, a run of list items, a paragraph, etc.)
     /// and advances `index` past them.
-    private static func renderBody(_ markdown: String) -> String {
+    private static func renderBody(_ markdown: String, codeBlocks: inout [String]) -> String {
         let lines = markdown.components(separatedBy: "\n")
         var blocks: [String] = []
         var index = 0
@@ -432,7 +595,7 @@ private enum MarkdownRenderer {
             if trimmed.isEmpty {
                 index += 1
             } else if trimmed.hasPrefix("```") {
-                let (html, next) = consumeFencedCodeBlock(lines, from: index)
+                let (html, next) = consumeFencedCodeBlock(lines, from: index, codeBlocks: &codeBlocks)
                 blocks.append(html)
                 index = next
             } else if isHorizontalRule(trimmed) {
@@ -472,7 +635,25 @@ private enum MarkdownRenderer {
         return "<h\(heading.level)>\(inline)</h\(heading.level)>"
     }
 
-    private static func consumeFencedCodeBlock(_ lines: [String], from start: Int) -> (html: String, next: Int) {
+    /// Consumes a ```-fenced block.
+    ///
+    /// The raw, un-escaped source is appended to `codeBlocks` and its index becomes the
+    /// `wisp-copy:` href of the block's Copy affordance — the only copy mechanism available
+    /// in a preview that executes no JavaScript.
+    ///
+    /// Two deliberate shape decisions:
+    ///
+    /// * The Copy anchor is a sibling of `<pre>` inside a wrapper `<div>`, **not** a child
+    ///   of `<pre>`. `pre` is `overflow-x: auto`, and an absolutely-positioned child of a
+    ///   horizontally scrolling box scrolls away with the content — the button would slide
+    ///   off the right edge as soon as the user scrolled a long line.
+    /// * There is no whitespace between `</a>`, `<pre>` and `<code>`. `<pre>` preserves
+    ///   whitespace, so a stray newline would render as a blank first line of code.
+    private static func consumeFencedCodeBlock(
+        _ lines: [String],
+        from start: Int,
+        codeBlocks: inout [String]
+    ) -> (html: String, next: Int) {
         var index = start + 1
         var codeLines: [String] = []
         while index < lines.count {
@@ -483,8 +664,18 @@ private enum MarkdownRenderer {
             codeLines.append(lines[index])
             index += 1
         }
+
+        // Verbatim source, and deliberately no synthesised trailing newline: Wisp is a
+        // terminal, and a pasted command ending in "\n" would execute the moment it lands
+        // in the shell. The opening fence's info string (```swift) is already excluded
+        // because the loop starts at `start + 1`.
+        let copyIndex = codeBlocks.count
+        codeBlocks.append(codeLines.joined(separator: "\n"))
+
         let escaped = codeLines.map(escapeHTML).joined(separator: "\n")
-        return ("<pre><code>\(escaped)</code></pre>", index)
+        let copyButton = "<a class=\"copy-btn\" href=\"\(copyScheme):\(copyIndex)\""
+            + " title=\"Copy code\" draggable=\"false\">Copy</a>"
+        return ("<div class=\"code-block\">\(copyButton)<pre><code>\(escaped)</code></pre></div>", index)
     }
 
     private static func consumeBlockquote(_ lines: [String], from start: Int) -> (html: String, next: Int) {
@@ -875,6 +1066,52 @@ private enum MarkdownRenderer {
         overflow-x: auto;
     }
     pre code { background-color: transparent; padding: 0; font-size: 0.88em; line-height: 1.5; }
+    /* Wrapper that owns the code block's vertical rhythm and acts as the positioning
+       context for the Copy affordance. `pre` keeps `overflow-x: auto`; the button lives
+       outside it so horizontal scrolling never carries it off-screen. */
+    .code-block { position: relative; margin: 0 0 1em; }
+    .code-block pre { margin: 0; }
+    /* `opacity: 0` rather than `visibility: hidden` or `display: none`: a hidden element
+       is not focusable, and keyboard reachability is the point of the :focus rules below.
+       Because the element therefore stays in the render tree AND in DOM text order, it
+       MUST be excluded from text selection - otherwise Cmd+A, or any drag spanning the
+       block, would prepend the literal word "Copy" to every fenced block. The -webkit-
+       prefix is required, not optional: unprefixed user-select only shipped in Safari 17,
+       and the deployment floor is macOS 13 whose WebKit is Safari 16. */
+    .copy-btn {
+        position: absolute;
+        top: 6px;
+        right: 6px;
+        padding: 2px 8px;
+        font-size: 11px;
+        font-family: -apple-system, BlinkMacSystemFont, sans-serif;
+        color: #656d76;
+        background-color: #f6f8fa;
+        border: 1px solid rgba(31,35,40,0.15);
+        border-radius: 5px;
+        text-decoration: none;
+        opacity: 0;
+        cursor: default;
+        -webkit-user-select: none;
+        user-select: none;
+        transition: opacity 120ms ease-in-out;
+    }
+    /* `:hover`, `:focus` and `:focus-visible` are matched by the style engine, not the
+       script engine, so all three keep working with `allowsContentJavaScript = false`.
+       `<a href>` is keyboard-focusable by definition, so `:focus-visible` gives Tab +
+       Return access for free (see `tabFocusesLinks` in MarkdownHTMLView). */
+    .code-block:hover .copy-btn,
+    .copy-btn:focus,
+    .copy-btn:focus-visible { opacity: 1; }
+    /* Beats the global `a:hover { text-decoration: underline }` on specificity, but
+       stated explicitly so the intent survives future edits. */
+    .copy-btn:hover {
+        color: #1f2328;
+        border-color: rgba(31,35,40,0.3);
+        text-decoration: none;
+    }
+    .copy-btn:active { background-color: rgba(175, 184, 193, 0.25); }
+    @media (prefers-reduced-motion: reduce) { .copy-btn { transition: none; } }
     blockquote {
         margin: 0 0 1em;
         padding: 0.1em 1em;
@@ -905,6 +1142,13 @@ private enum MarkdownRenderer {
         a { color: #4493f8; }
         code { background-color: rgba(110,118,129,0.3); }
         pre { background-color: rgba(110,118,129,0.15); }
+        .copy-btn {
+            background-color: #161b22;
+            color: #9198a1;
+            border-color: rgba(230,237,243,0.16);
+        }
+        .copy-btn:hover { color: #e6edf3; border-color: rgba(230,237,243,0.32); }
+        .copy-btn:active { background-color: rgba(110,118,129,0.3); }
         blockquote { color: #9198a1; border-left-color: #3d444d; }
         hr { border-top-color: rgba(230,237,243,0.16); }
         th, td { border-color: #3d444d; }
