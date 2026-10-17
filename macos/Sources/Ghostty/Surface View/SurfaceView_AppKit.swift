@@ -923,17 +923,26 @@ extension Ghostty {
         }
 
         /// The existing file/dir the mouse is currently over, if the word under the cursor
-        /// resolves to one (relative to the surface's cwd). Powers both ⌘-click and the
+        /// (or the active selection) resolves to one (relative to the surface's cwd). Powers both ⌘-click and the
         /// right-click "Open / Show in Finder / Copy Path" menu items.
         private func resolvedFilePathUnderCursor() -> URL? {
             guard let surface = self.surface else { return nil }
 
+            let cwd = pwd.flatMap { URL(fileURLWithPath: $0) }
+
+            // 1. If user has selected text that resolves to a file, prefer that
+            if let selected = accessibilitySelectedText(), !selected.isEmpty {
+                if let url = TerminalFilePath.resolve(token: selected, cwd: cwd) {
+                    return url
+                }
+            }
+
+            // 2. Otherwise query the word under the cursor
             var text = ghostty_text_s()
             guard ghostty_surface_quicklook_word(surface, &text) else { return nil }
             defer { ghostty_surface_free_text(surface, &text) }
             guard text.text_len > 0, let cString = text.text else { return nil }
 
-            let cwd = pwd.flatMap { URL(fileURLWithPath: $0) }
             return TerminalFilePath.resolve(token: String(cString: cString), cwd: cwd)
         }
 
@@ -1652,14 +1661,17 @@ extension Ghostty {
             var item: NSMenuItem
 
             // Warp-style: if the right-click landed on a file path in the output, offer to
-            // open it in Wisp, reveal it in Finder, or copy its path.
+            // open/preview it in Wisp, reveal it in Finder, or copy its path.
             if let pathURL = resolvedFilePathUnderCursor() {
+                let ext = pathURL.pathExtension.lowercased()
+                let isMd = ext == "md" || ext == "markdown"
+                let title = isMd ? "Preview “\(pathURL.lastPathComponent)” in Side Pane" : "Open “\(pathURL.lastPathComponent)” in Wisp"
                 item = menu.addItem(
-                    withTitle: "Open “\(pathURL.lastPathComponent)” in Wisp",
+                    withTitle: title,
                     action: #selector(wispOpenPathInPane(_:)),
                     keyEquivalent: "")
                 item.representedObject = pathURL
-                item.setImageIfDesired(systemSymbolName: "doc.text")
+                item.setImageIfDesired(systemSymbolName: isMd ? "doc.richtext" : "doc.text")
 
                 item = menu.addItem(withTitle: "Show in Finder", action: #selector(wispRevealPathInFinder(_:)), keyEquivalent: "")
                 item.representedObject = pathURL

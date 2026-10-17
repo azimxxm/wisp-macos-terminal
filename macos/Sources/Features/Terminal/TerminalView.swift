@@ -59,6 +59,25 @@ struct TerminalView<ViewModel: TerminalViewModel>: View {
     /// The file currently open in the Markdown read/edit pane, if any.
     @State private var openMarkdownURL: URL?
 
+    /// User-adjustable width of the markdown preview/edit pane (dragged via the divider, persisted).
+    @AppStorage("com.azimxxm.wisp.markdownPaneWidth") private var markdownPaneWidth: Double = 480
+
+    /// Allowed markdown pane width range.
+    private static var markdownPaneWidthRange: ClosedRange<CGFloat> { 320...960 }
+
+    /// Clamped persisted markdown pane width.
+    private var clampedMarkdownPaneWidth: CGFloat {
+        min(max(CGFloat(markdownPaneWidth), Self.markdownPaneWidthRange.lowerBound), Self.markdownPaneWidthRange.upperBound)
+    }
+
+    /// Live width while the markdown pane divider is being dragged.
+    @State private var liveMarkdownPaneWidth: CGFloat?
+
+    /// Width the markdown pane actually renders at.
+    private var effectiveMarkdownPaneWidth: CGFloat {
+        liveMarkdownPaneWidth ?? clampedMarkdownPaneWidth
+    }
+
     /// The most recent non-empty working directory. The sidebar reads this instead of the live
     /// focused pwd so that clicking into the sidebar's search field — which moves focus off the
     /// terminal and makes the focused `pwd` go nil — does not blank the file list.
@@ -106,17 +125,6 @@ struct TerminalView<ViewModel: TerminalViewModel>: View {
         return URL(fileURLWithPath: surfacePwd)
     }
 
-    /// Extensions opened in the in-window Markdown/text pane. Anything else (images,
-    /// binaries, …) is revealed in Finder instead.
-    private static var paneTextExtensions: Set<String> {
-        [
-            "md", "markdown", "txt", "text", "swift", "js", "jsx", "ts", "tsx", "json",
-            "yaml", "yml", "toml", "sh", "zsh", "bash", "py", "go", "rs", "c", "h", "cpp",
-            "cc", "hpp", "m", "mm", "css", "scss", "html", "xml", "zig", "conf", "cfg",
-            "ini", "log", "rb", "java", "kt", "gradle", "lua", "php", "sql", "env",
-        ]
-    }
-
     /// Opens a file picked in the sidebar or ⌘-clicked in the terminal: directories reveal
     /// in Finder; text-like files (and extension-less files such as LICENSE/Makefile) go to
     /// the Markdown pane; everything else reveals in Finder.
@@ -128,8 +136,7 @@ struct TerminalView<ViewModel: TerminalViewModel>: View {
             return
         }
 
-        let ext = url.pathExtension.lowercased()
-        if ext.isEmpty || Self.paneTextExtensions.contains(ext) {
+        if TerminalFilePath.isTextOrMarkdownFile(url: url) {
             openMarkdownURL = url
         } else {
             NSWorkspace.shared.activateFileViewerSelecting([url])
@@ -276,11 +283,24 @@ struct TerminalView<ViewModel: TerminalViewModel>: View {
                     // Ignore safe area to extend up in to the titlebar region if we have the "hidden" titlebar style
                     .ignoresSafeArea(.container, edges: ghostty.config.macosTitlebarStyle == .hidden ? .top : [])
 
-                    // Warp-style Markdown read/edit pane (opened from the sidebar).
+                    // Warp-style Markdown read/edit pane (opened from the sidebar or terminal link).
                     if let url = openMarkdownURL {
-                        Divider()
+                        SidebarResizeHandle(
+                            width: Binding(
+                                get: { effectiveMarkdownPaneWidth },
+                                set: { liveMarkdownPaneWidth = $0 }
+                            ),
+                            range: Self.markdownPaneWidthRange,
+                            isTrailing: true,
+                            onCommit: {
+                                if let live = liveMarkdownPaneWidth {
+                                    markdownPaneWidth = Double(live)
+                                    liveMarkdownPaneWidth = nil
+                                }
+                            }
+                        )
                         MarkdownPaneView(url: url) { openMarkdownURL = nil }
-                            .frame(minWidth: 320, idealWidth: 480, maxWidth: 760)
+                            .frame(width: effectiveMarkdownPaneWidth)
                     }
                 }
 
@@ -307,11 +327,11 @@ struct TerminalView<ViewModel: TerminalViewModel>: View {
                 withAnimation(.easeInOut(duration: 0.15)) { showGitBar.toggle() }
             }
             .onReceive(NotificationCenter.default.publisher(for: .wispOpenPath)) { note in
-                // Only the window whose focused surface fired this should open the file, so
-                // a ⌘-click in one window doesn't pop a pane in every other window too.
-                guard let posted = note.object as? Ghostty.SurfaceView,
-                      posted === lastFocusedSurface?.value,
-                      let url = note.userInfo?[wispOpenPathURLKey] as? URL else { return }
+                // Only the window whose focused surface fired this should open the file
+                if let posted = note.object as? Ghostty.SurfaceView {
+                    guard posted === lastFocusedSurface?.value || posted === focusedSurface || lastFocusedSurface == nil else { return }
+                }
+                guard let url = note.userInfo?[wispOpenPathURLKey] as? URL else { return }
                 openInPane(url)
             }
         }
@@ -329,6 +349,7 @@ extension Notification.Name {
 private struct SidebarResizeHandle: View {
     @Binding var width: CGFloat
     let range: ClosedRange<CGFloat>
+    var isTrailing: Bool = false
 
     /// Called once when the drag ends so the caller can persist the final width, instead of
     /// writing it on every frame.
@@ -358,7 +379,8 @@ private struct SidebarResizeHandle: View {
                             .onChanged { value in
                                 let base = dragStartWidth ?? width
                                 if dragStartWidth == nil { dragStartWidth = base }
-                                width = min(max(base + value.translation.width, range.lowerBound), range.upperBound)
+                                let delta = isTrailing ? -value.translation.width : value.translation.width
+                                width = min(max(base + delta, range.lowerBound), range.upperBound)
                             }
                             .onEnded { _ in
                                 dragStartWidth = nil

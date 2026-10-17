@@ -13,16 +13,17 @@ struct MarkdownPaneView: View {
     let url: URL
     let onClose: () -> Void
 
-    /// Which half of the pane is currently visible.
+    /// Which view mode of the pane is currently visible.
     private enum ViewMode: String, CaseIterable, Hashable {
-        case rendered = "Rendered"
-        case raw = "Raw"
+        case preview = "Preview"
+        case edit = "Edit"
+        case split = "Split"
     }
 
     /// Named layout constants for the header chrome (avoids magic numbers scattered
     /// through the view body below).
     private enum Layout {
-        static let modeSwitcherWidth: CGFloat = 200
+        static let modeSwitcherWidth: CGFloat = 240
         static let modifiedDotSize: CGFloat = 6
         static let headerIconSize: CGFloat = 22
         static let headerIconCornerRadius: CGFloat = 5
@@ -37,7 +38,7 @@ struct MarkdownPaneView: View {
     /// enough that it is gone before the user reaches the terminal to paste.
     private static let copyConfirmationDuration: Duration = .milliseconds(1400)
 
-    @State private var mode: ViewMode = .rendered
+    @State private var mode: ViewMode = .preview
     /// The document's current text. This is the single source of truth for both the
     /// raw editor and the rendered preview — switching modes never re-reads the file,
     /// it just re-renders (or re-edits) whatever is already in memory.
@@ -48,6 +49,7 @@ struct MarkdownPaneView: View {
     @State private var isSaveHovered = false
     @State private var isCloseHovered = false
     @State private var isFindHovered = false
+    @State private var isMenuHovered = false
     /// Bridges the header's Find button to the raw editor's native AppKit find/replace bar.
     @State private var findController = RawEditorFindController()
 
@@ -90,10 +92,15 @@ struct MarkdownPaneView: View {
     private var header: some View {
         HStack(spacing: 12) {
             HStack(spacing: 6) {
+                Image(systemName: isMarkdownFile ? "doc.richtext" : "doc.text")
+                    .foregroundStyle(Color.accentColor)
+                    .font(.system(size: 13))
+
                 Text(url.lastPathComponent)
                     .font(.headline)
                     .lineLimit(1)
                     .truncationMode(.middle)
+
                 if isModified {
                     Circle()
                         .fill(Color.accentColor)
@@ -149,6 +156,48 @@ struct MarkdownPaneView: View {
             .accessibilityLabel("Save")
             .onHover { isSaveHovered = $0 }
 
+            Menu {
+                Button {
+                    openInExternalEditor()
+                } label: {
+                    Label("Open in External Editor", systemImage: "arrow.up.forward.app")
+                }
+                Button {
+                    NSWorkspace.shared.activateFileViewerSelecting([url])
+                } label: {
+                    Label("Show in Finder", systemImage: "folder")
+                }
+                Button {
+                    NSPasteboard.general.clearContents()
+                    NSPasteboard.general.setString(url.path, forType: .string)
+                } label: {
+                    Label("Copy File Path", systemImage: "doc.on.clipboard")
+                }
+                Button {
+                    NSPasteboard.general.clearContents()
+                    NSPasteboard.general.setString(text, forType: .string)
+                } label: {
+                    Label("Copy All Text", systemImage: "doc.on.doc")
+                }
+                Divider()
+                Button {
+                    Task { await load() }
+                } label: {
+                    Label("Reload from Disk", systemImage: "arrow.clockwise")
+                }
+            } label: {
+                Image(systemName: "ellipsis.circle")
+                    .frame(width: Layout.headerIconSize, height: Layout.headerIconSize)
+                    .background(
+                        RoundedRectangle(cornerRadius: Layout.headerIconCornerRadius, style: .continuous)
+                            .fill(isMenuHovered ? Color.primary.opacity(0.08) : Color.clear)
+                    )
+            }
+            .menuStyle(.borderlessButton)
+            .menuIndicator(.hidden)
+            .help("More Actions")
+            .onHover { isMenuHovered = $0 }
+
             Button {
                 onClose()
             } label: {
@@ -160,13 +209,28 @@ struct MarkdownPaneView: View {
                     )
             }
             .buttonStyle(.plain)
-            .help("Close")
+            .keyboardShortcut("w", modifiers: .command)
+            .help("Close (⌘W)")
             .accessibilityLabel("Close")
             .onHover { isCloseHovered = $0 }
         }
         .animation(reduceMotion ? nil : .easeInOut(duration: 0.2), value: isModified)
         .padding(.horizontal, Layout.headerHorizontalPadding)
         .padding(.vertical, Layout.headerVerticalPadding)
+    }
+
+    private var isMarkdownFile: Bool {
+        let ext = url.pathExtension.lowercased()
+        return ext == "md" || ext == "markdown" || ext == "mdown" || ext == "mkd"
+    }
+
+    private func openInExternalEditor() {
+        let editor = NSWorkspace.shared.defaultApplicationURL(forExtension: url.pathExtension) ?? NSWorkspace.shared.defaultTextEditor
+        if let editor {
+            NSWorkspace.shared.open([url], withApplicationAt: editor, configuration: NSWorkspace.OpenConfiguration())
+        } else {
+            NSWorkspace.shared.open(url)
+        }
     }
 
     private func errorBanner(_ message: String) -> some View {
@@ -187,12 +251,27 @@ struct MarkdownPaneView: View {
     @ViewBuilder
     private var content: some View {
         switch mode {
-        case .rendered:
+        case .preview:
             renderedPreview
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
-        case .raw:
+        case .edit:
             MarkdownRawEditor(text: $text, findController: findController) {
                 isModified = true
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+        case .split:
+            HStack(spacing: 0) {
+                // Editor on the left (chat/terminal side)
+                MarkdownRawEditor(text: $text, findController: findController) {
+                    isModified = true
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+
+                Divider()
+
+                // Rendered preview on the right
+                renderedPreview
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
@@ -252,11 +331,11 @@ struct MarkdownPaneView: View {
         }
     }
 
-    /// Shows the native find/replace bar over the raw editor. Switches to Raw mode first
+    /// Shows the native find/replace bar over the raw editor. Switches to Edit mode first
     /// (find/replace only makes sense on editable text), deferring the call one runloop tick
     /// so the editor exists in the view hierarchy before we message it.
     private func showFindReplace() {
-        if mode != .raw { mode = .raw }
+        if mode == .preview { mode = .edit }
         DispatchQueue.main.async {
             findController.showFindReplace()
         }

@@ -681,7 +681,7 @@ extension Ghostty {
                 checkForUpdates(app)
 
             case GHOSTTY_ACTION_OPEN_URL:
-                return openURL(action.action.open_url)
+                return openURL(action.action.open_url, target: target)
 
             case GHOSTTY_ACTION_UNDO:
                 return undo(app, target: target)
@@ -759,9 +759,16 @@ extension Ghostty {
         }
 
         private static func openURL(
-            _ v: ghostty_action_open_url_s
+            _ v: ghostty_action_open_url_s,
+            target: ghostty_target_s? = nil
         ) -> Bool {
             let action = Ghostty.Action.OpenURL(c: v)
+
+            // Resolve target surfaceView if available
+            var targetSurfaceView: Ghostty.SurfaceView?
+            if let target, target.tag == GHOSTTY_TARGET_SURFACE, let surface = target.target.surface {
+                targetSurfaceView = self.surfaceView(from: surface)
+            }
 
             // If the URL doesn't have a valid scheme we assume its a file path. The URL
             // initializer will gladly take invalid URLs (e.g. plain file paths) and turn
@@ -775,6 +782,30 @@ extension Ghostty {
                 // like ~/Documents/file.txt resolve correctly.
                 let expandedPath = NSString(string: action.url).standardizingPath
                 url = URL(filePath: expandedPath)
+            }
+
+            // Check if this URL points to a local text/markdown file.
+            // If so, open it inside Wisp's Markdown/text side pane instead of
+            // launching an external macOS application!
+            let fileURLCandidate: URL? = {
+                if url.isFileURL || url.scheme == "file" || url.scheme == nil {
+                    let path = url.path
+                    if FileManager.default.fileExists(atPath: path) {
+                        return URL(fileURLWithPath: path).standardizedFileURL
+                    }
+                }
+                // Try resolving via TerminalFilePath using the surface's cwd
+                let cwd = targetSurfaceView?.pwd.flatMap { URL(fileURLWithPath: $0) }
+                return TerminalFilePath.resolve(token: action.url, cwd: cwd)
+            }()
+
+            if let fileURL = fileURLCandidate, TerminalFilePath.isTextOrMarkdownFile(url: fileURL) {
+                NotificationCenter.default.post(
+                    name: .wispOpenPath,
+                    object: targetSurfaceView,
+                    userInfo: [wispOpenPathURLKey: fileURL]
+                )
+                return true
             }
 
             switch action.kind {
