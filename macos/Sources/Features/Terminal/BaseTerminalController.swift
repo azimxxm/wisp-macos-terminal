@@ -1256,7 +1256,8 @@ class BaseTerminalController: NSWindowController,
         }
         guard let button = sender as? NSView else { return }
         wispClaudeUsageStore.reload()
-        let hud = ClaudeHUDView(store: wispClaudeUsageStore) { [weak self] text in
+        let activeModel = focusedSurface?.surfaceModel?.foregroundPID.flatMap(ClaudeSession.activeModelID(pid:))
+        let hud = ClaudeHUDView(store: wispClaudeUsageStore, activeModelID: activeModel) { [weak self] text in
             self?.focusedSurface?.surfaceModel?.sendText(text)
         }
         let popover = NSPopover()

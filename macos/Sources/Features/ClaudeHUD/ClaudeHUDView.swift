@@ -4,6 +4,10 @@ import SwiftUI
 /// GUI to switch the model and reasoning effort of the focused Claude session.
 struct ClaudeHUDView: View {
     @ObservedObject var store: ClaudeUsageStore
+    @ObservedObject var catalog: ClaudeModelCatalog = .shared
+
+    /// Model id the focused Claude session last answered with (e.g. "claude-opus-5-5").
+    var activeModelID: String?
 
     /// Sends text to the focused terminal surface (used to inject `/model` and `/effort`).
     var onSend: (String) -> Void
@@ -20,7 +24,10 @@ struct ClaudeHUDView: View {
         }
         .padding(18)
         .frame(width: 340)
-        .onAppear { store.reload() }
+        .onAppear {
+            store.reload()
+            catalog.reload()
+        }
     }
 
     // MARK: - Usage
@@ -142,7 +149,7 @@ struct ClaudeHUDView: View {
             Text("Switches the focused Claude session")
                 .font(.system(size: 11))
                 .foregroundStyle(.tertiary)
-            ForEach(Self.models) { model in
+            ForEach(modelChoices) { model in
                 Button {
                     onSend("/model \(model.command)\r")
                 } label: {
@@ -155,6 +162,11 @@ struct ClaudeHUDView: View {
                             Text(model.hint).font(.system(size: 11)).foregroundStyle(.secondary)
                         }
                         Spacer()
+                        if model.isActive {
+                            Image(systemName: "checkmark.circle.fill")
+                                .foregroundStyle(accent)
+                                .help("This session is using it")
+                        }
                     }
                     .padding(.vertical, 6)
                     .padding(.horizontal, 8)
@@ -174,7 +186,7 @@ struct ClaudeHUDView: View {
             Label("Effort", systemImage: "dial.medium")
                 .font(.system(size: 14, weight: .semibold))
             HStack(spacing: 6) {
-                ForEach(Self.efforts, id: \.self) { effort in
+                ForEach(catalog.efforts, id: \.self) { effort in
                     Button {
                         onSend("/effort \(effort)\r")
                     } label: {
@@ -208,16 +220,35 @@ struct ClaudeHUDView: View {
         let command: String
         let hint: String
         let symbol: String
+        let isActive: Bool
         var id: String { command }
     }
 
-    /// Model choices. `command` is what gets sent to Claude Code's `/model`.
-    private static let models: [ModelChoice] = [
-        .init(name: "Fable 5", command: "claude-fable-5", hint: "Strongest · densest reasoning", symbol: "crown.fill"),
-        .init(name: "Opus 4.8", command: "opus", hint: "Most capable · supports Fast mode", symbol: "bolt.fill"),
-        .init(name: "Sonnet 5", command: "sonnet", hint: "Balanced speed and capability", symbol: "scalemass.fill"),
-        .init(name: "Haiku 4.5", command: "haiku", hint: "Fastest · cheapest", symbol: "hare.fill"),
+    /// Built from Anthropic's model list (newest per family). `command` is the family alias
+    /// for Claude Code's `/model`, so it always resolves to that newest version.
+    private var modelChoices: [ModelChoice] {
+        let families = catalog.models.isEmpty
+            ? ClaudeModelCatalog.aliasFamilies.map { ($0, $0.capitalized, nil as ClaudeModelInfo?) }
+            : catalog.models.map { ($0.family, $0.shortName, $0 as ClaudeModelInfo?) }
+        return families.map { family, name, info in
+            let style = Self.familyStyle[family] ?? ("Claude model", "sparkle")
+            var hint = style.hint
+            if let tokens = info?.maxInputTokens { hint += " · \(Self.contextLabel(tokens)) context" }
+            let command = ClaudeModelCatalog.aliasFamilies.contains(family) ? family : (info?.id ?? family)
+            let isActive = activeModelID != nil && (activeModelID == info?.id || activeModelID?.contains("-\(family)-") == true)
+            return ModelChoice(name: name, command: command, hint: hint, symbol: style.symbol, isActive: isActive)
+        }
+    }
+
+    /// The API has no descriptions, so each family keeps a short one here.
+    private static let familyStyle: [String: (hint: String, symbol: String)] = [
+        "fable": ("Strongest · densest reasoning · 2.5× Opus price", "crown.fill"),
+        "opus": ("Most capable everyday model · Fast mode", "bolt.fill"),
+        "sonnet": ("Balanced speed and capability", "scalemass.fill"),
+        "haiku": ("Fastest · cheapest", "hare.fill"),
     ]
 
-    private static let efforts = ["low", "medium", "high", "xhigh", "max"]
+    private static func contextLabel(_ tokens: Int) -> String {
+        tokens >= 1_000_000 ? "\(tokens / 1_000_000)M" : "\(tokens / 1000)K"
+    }
 }

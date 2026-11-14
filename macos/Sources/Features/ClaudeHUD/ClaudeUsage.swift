@@ -203,48 +203,16 @@ final class ClaudeUsageStore: ObservableObject {
     }
 
     private enum UsageError: Error {
-        case noToken, rateLimited, badStatus(Int), unexpectedResponse
+        case rateLimited, badStatus(Int), unexpectedResponse
     }
 
     private static func fetchUsage() async throws -> Data {
         guard let url = usageURL else { throw UsageError.unexpectedResponse }
-        let token = try await Task.detached { try readAccessToken() }.value
-        var request = URLRequest(url: url, timeoutInterval: requestTimeout)
-        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
-        request.setValue("oauth-2025-04-20", forHTTPHeaderField: "anthropic-beta")
+        let request = try await ClaudeAuth.request(url, timeout: requestTimeout)
         let (data, response) = try await URLSession.shared.data(for: request)
         let status = (response as? HTTPURLResponse)?.statusCode ?? 0
         if status == 429 { throw UsageError.rateLimited }
         guard status == 200 else { throw UsageError.badStatus(status) }
         return data
-    }
-
-    /// Claude Code keeps its OAuth login in the Keychain ("Claude Code-credentials"), or in
-    /// `~/.claude/.credentials.json` on older installs. Asking through `/usr/bin/security`
-    /// matches what the status line does, so macOS doesn't show an extra Keychain prompt.
-    nonisolated private static func readAccessToken() throws -> String {
-        struct Credentials: Decodable {
-            struct OAuth: Decodable { let accessToken: String? }
-            let claudeAiOauth: OAuth?
-        }
-
-        var json = Data()
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/usr/bin/security")
-        process.arguments = ["find-generic-password", "-s", "Claude Code-credentials", "-w"]
-        let pipe = Pipe()
-        process.standardOutput = pipe
-        process.standardError = FileHandle.nullDevice
-        if (try? process.run()) != nil {
-            json = pipe.fileHandleForReading.readDataToEndOfFile()
-            process.waitUntilExit()
-        }
-        if json.isEmpty {
-            let file = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".claude/.credentials.json")
-            json = (try? Data(contentsOf: file)) ?? Data()
-        }
-        let credentials = try? JSONDecoder().decode(Credentials.self, from: json)
-        guard let token = credentials?.claudeAiOauth?.accessToken, !token.isEmpty else { throw UsageError.noToken }
-        return token
     }
 }

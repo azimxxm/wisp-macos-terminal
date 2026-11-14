@@ -92,6 +92,8 @@ final class AgentActivity: ObservableObject {
     func state(of view: Ghostty.SurfaceView) -> AgentState {
         if waiting.contains(view.id) { return .waiting }
         if let report = view.progressReport, report.state != .remove { return .working }
+        // Claude Code also says itself whether it is mid-turn.
+        if let pid = view.surfaceModel?.foregroundPID, ClaudeSession.status(pid: pid) == "busy" { return .working }
         return .idle
     }
 
