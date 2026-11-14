@@ -31,16 +31,26 @@ struct ClaudeHUDView: View {
                 Label("Plan usage", systemImage: "gauge.with.dots.needle.bottom.50percent")
                     .font(.system(size: 14, weight: .semibold))
                 Spacer()
-                Button {
-                    store.reload()
-                } label: {
-                    Image(systemName: "arrow.clockwise")
+                if store.isRefreshing {
+                    ProgressView().controlSize(.small)
+                } else {
+                    Button {
+                        store.reload(force: true)
+                    } label: {
+                        Image(systemName: "arrow.clockwise")
+                    }
+                    .buttonStyle(.plain)
+                    .help("Refresh usage")
                 }
-                .buttonStyle(.plain)
-                .help("Refresh usage")
             }
 
             if let limits = store.snapshot?.limits, !limits.isEmpty {
+                // The API only lists the 5-hour session limit while a session window is open.
+                if !limits.contains(where: { $0.kind == "session" }) {
+                    Text("Current session: not started — begins with your next message")
+                        .font(.system(size: 11))
+                        .foregroundStyle(.secondary)
+                }
                 ForEach(limits) { limit in
                     usageRow(
                         title: limit.title,
@@ -65,9 +75,14 @@ struct ClaudeHUDView: View {
             }
 
             if let loaded = store.lastLoaded {
-                Text("Updated \(loaded.formatted(date: .omitted, time: .shortened))")
+                Text("Updated \(loaded.formatted(date: Calendar.current.isDateInToday(loaded) ? .omitted : .abbreviated, time: .shortened))")
                     .font(.system(size: 11))
                     .foregroundStyle(.tertiary)
+            }
+            if let liveError = store.liveError {
+                Label(liveError, systemImage: "exclamationmark.triangle")
+                    .font(.system(size: 11))
+                    .foregroundStyle(.orange)
             }
         }
     }
