@@ -93,6 +93,7 @@ private struct TerminalSplitLeaf: View {
 
     @State private var dropState: DropState = .idle
     @State private var isSelfDragging: Bool = false
+    @State private var isHovering: Bool = false
 
     var body: some View {
         GeometryReader { geometry in
@@ -119,6 +120,14 @@ private struct TerminalSplitLeaf: View {
                         .allowsHitTesting(false)
                 }
             }
+            .overlay(alignment: .topTrailing) {
+                // Wisp: a split can be closed with the mouse, not only with ⌘W.
+                if isSplit && isHovering && !isSelfDragging {
+                    SplitCloseButton { surfaceView.closeWispSplit(surfaceView) }
+                        .padding(6)
+                }
+            }
+            .onHover { isHovering = $0 }
             .onPreferenceChange(Ghostty.DraggingSurfaceKey.self) { value in
                 isSelfDragging = value == surfaceView.id
                 if isSelfDragging {
@@ -127,6 +136,23 @@ private struct TerminalSplitLeaf: View {
             }
             .accessibilityElement(children: .contain)
             .accessibilityLabel("Terminal pane")
+        }
+    }
+
+    /// Small × shown in the top-right corner of a split pane while the mouse is over it.
+    private struct SplitCloseButton: View {
+        let action: () -> Void
+
+        var body: some View {
+            Button(action: action) {
+                Image(systemName: "xmark")
+                    .font(.system(size: 10, weight: .bold))
+                    .frame(width: 20, height: 20)
+                    .background(.regularMaterial, in: Circle())
+            }
+            .buttonStyle(.plain)
+            .help("Close Split (⌘W)")
+            .accessibilityLabel("Close Split")
         }
     }
 
