@@ -170,6 +170,24 @@ final class AIPermissionsController: NSWindowController {
         NSApp.activate(ignoringOtherApps: true)
     }
 
+    /// macOS can drop a grant later (a reset, a different build). Each time Wisp comes to the
+    /// front, re-check and bring the window back if a permission that worked is gone.
+    func watchForLostPermissions() {
+        NotificationCenter.default.addObserver(
+            forName: NSApplication.didBecomeActiveNotification, object: nil, queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor in await self?.showIfPermissionLost() }
+        }
+    }
+
+    @MainActor
+    private func showIfPermissionLost() async {
+        guard window?.isVisible != true else { return }
+        let hadAll = model.allRequiredGranted
+        await model.refresh()
+        if hadAll, !model.allRequiredGranted { show() }
+    }
+
     /// Checks the required permissions and opens the window only when one is missing.
     @MainActor
     func showIfAnyRequiredMissing() async {

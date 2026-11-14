@@ -92,6 +92,12 @@
       <property name="working directory" code="Gwdr" type="text" access="r" description="Current working directory for the terminal process."/>
       <property name="pid" code="Gpid" type="integer" access="r" description="PID of the foreground process in this terminal."/>
       <property name="tty" code="Gtty" type="text" access="r" description="TTY device path for this terminal (e.g. /dev/ttys016)."/>
+      <property name="contents" code="Gcnt" type="text" access="r" description="All text in the terminal (scrollback and screen)."/>
+      <property name="visible contents" code="Gvcn" type="text" access="r" description="Text currently visible on screen."/>
+      <property name="last command output" code="Glco" type="text" access="r" description="Output of the last finished command (needs shell integration)."/>
+      <property name="last exit status" code="Gles" type="integer" access="r" description="Exit status of the last finished command, or -1 if unknown."/>
+      <property name="finished commands" code="Gfcm" type="integer" access="r" description="How many commands have finished in this terminal; grows by one per command."/>
+      <property name="agent state" code="Gags" type="text" access="r" description="AI agent state: working, waiting, idle, or none."/>
       <responds-to command="split">
         <cocoa method="handleSplitCommand:"/>
       </responds-to>

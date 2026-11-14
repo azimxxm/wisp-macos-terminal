@@ -1490,6 +1490,7 @@ extension Ghostty {
                 guard let surfaceView = self.surfaceView(from: surface) else { return }
                 guard let title = String(cString: n.title!, encoding: .utf8) else { return }
                 guard let body = String(cString: n.body!, encoding: .utf8) else { return }
+                MainActor.assumeIsolated { AgentActivity.shared.attentionRequested(by: surfaceView) }
                 showDesktopNotification(surfaceView, title: title, body: body)
 
             default:
@@ -1532,6 +1533,10 @@ extension Ghostty {
             case GHOSTTY_TARGET_SURFACE:
                 guard let surface = target.target.surface else { return }
                 guard let surfaceView = self.surfaceView(from: surface) else { return }
+
+                // Wisp: remember the exit code so scripts and agents can wait on commands.
+                let exitCode = Int(v.exit_code)
+                MainActor.assumeIsolated { AgentActivity.shared.commandFinished(surfaceView, exitCode: exitCode) }
 
                 // Determine if we even care about command finish notifications
                 guard let config = (NSApplication.shared.delegate as? AppDelegate)?.ghostty.config else { return }

@@ -69,6 +69,50 @@ final class ScriptTerminal: NSObject {
         return surfaceView?.surfaceModel?.ttyName ?? ""
     }
 
+    /// Exposed as the AppleScript `contents` property: scrollback plus screen as plain text.
+    @objc(contents)
+    var contents: String {
+        guard NSApp.isAppleScriptEnabled else { return "" }
+        return surfaceView?.cachedScreenContents.get() ?? ""
+    }
+
+    /// Exposed as the AppleScript `visible contents` property: only what is on screen now.
+    @objc(visibleContents)
+    var visibleContents: String {
+        guard NSApp.isAppleScriptEnabled else { return "" }
+        return surfaceView?.cachedVisibleContents.get() ?? ""
+    }
+
+    /// Exposed as the AppleScript `last command output` property (needs shell integration).
+    @objc(lastCommandOutput)
+    var lastCommandOutput: String {
+        guard NSApp.isAppleScriptEnabled else { return "" }
+        return surfaceView?.readLastCommandOutput() ?? ""
+    }
+
+    /// Exposed as the AppleScript `last exit status` property; -1 when unknown.
+    @objc(lastExitStatus)
+    var lastExitStatus: Int {
+        guard NSApp.isAppleScriptEnabled, let surfaceView else { return -1 }
+        return AgentActivity.shared.lastExitCode(surfaceView)
+    }
+
+    /// Exposed as `finished commands`: grows by one every time a command finishes, so a script
+    /// can send a command and wait for this number to change.
+    @objc(finishedCommands)
+    var finishedCommands: Int {
+        guard NSApp.isAppleScriptEnabled, let surfaceView else { return 0 }
+        return AgentActivity.shared.finishedCommandCount(surfaceView)
+    }
+
+    /// Exposed as `agent state`: "working", "waiting", "idle", or "none" when no AI agent runs.
+    @objc(agentState)
+    var agentState: String {
+        guard NSApp.isAppleScriptEnabled, let surfaceView else { return "none" }
+        guard AgentActivity.shared.agentName(for: surfaceView) != nil else { return "none" }
+        return AgentActivity.shared.state(of: surfaceView).rawValue
+    }
+
     /// Used by command handling (`perform action ... on <terminal>`).
     func perform(action: String) -> Bool {
         guard NSApp.isAppleScriptEnabled else { return false }
