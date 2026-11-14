@@ -361,7 +361,7 @@ extension Ghostty {
                     // "acceptsFirstMouse" because that forces us to also handle the
                     // event and encode the event to the pty which we want to avoid.
                     // (Issue 2595)
-                    .leftMouseDown,
+                    .leftMouseDown
                 ]
             ) { [weak self] event in self?.localEventHandler(event) }
 
@@ -860,7 +860,7 @@ extension Ghostty {
 
                     // We want active always because we want to still send mouse reports
                     // even if we're not focused or key.
-                    .activeAlways,
+                    .activeAlways
                 ],
                 owner: self,
                 userInfo: nil))
@@ -929,6 +929,12 @@ extension Ghostty {
             guard let surface = self.surface else { return nil }
 
             let cwd = pwd.flatMap { URL(fileURLWithPath: $0) }
+
+            // 0. A hyperlink under the mouse (Claude Code prints paths as OSC 8 file:// links)
+            // is exact; the word under the cursor would stop at "/" and resolve to the root folder.
+            if let hover = hoverUrl, let url = TerminalFilePath.resolve(token: hover, cwd: cwd) {
+                return url
+            }
 
             // 1. If user has selected text that resolves to a file, prefer that
             if let selected = accessibilitySelectedText(), !selected.isEmpty {
@@ -1940,7 +1946,7 @@ extension Ghostty {
             content.categoryIdentifier = Ghostty.userNotificationCategory
             content.userInfo = [
                 "surface": self.id.uuidString,
-                "requireFocus": requireFocus,
+                "requireFocus": requireFocus
             ]
 
             let uuid = UUID().uuidString
@@ -2421,7 +2427,7 @@ extension Ghostty.SurfaceView: NSMenuItemValidation {
 extension Ghostty.SurfaceView {
     static let dropTypes: Set<NSPasteboard.PasteboardType> = [
         .string,
-        .fileURL,
+        .fileURL
     ]
 
     override func draggingEntered(_ sender: any NSDraggingInfo) -> NSDragOperation {
