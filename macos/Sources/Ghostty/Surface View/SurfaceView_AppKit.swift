@@ -1708,6 +1708,8 @@ extension Ghostty {
             item.setImageIfDesired(systemSymbolName: "list.clipboard")
 
             menu.addItem(withTitle: "Paste", action: #selector(paste(_:)), keyEquivalent: "")
+            item = menu.addItem(withTitle: "Attach Files…", action: #selector(wispAttachFiles(_:)), keyEquivalent: "")
+            item.setImageIfDesired(systemSymbolName: "paperclip")
 
             menu.addItem(.separator())
             item = menu.addItem(withTitle: "Split Right", action: #selector(splitRight(_:)), keyEquivalent: "")
@@ -1794,6 +1796,26 @@ extension Ghostty {
             if !ghostty_surface_binding_action(surface, action, UInt(action.lengthOfBytes(using: .utf8))) {
                 NSSound.beep()
                 AppDelegate.logger.warning("action failed action=\(action, privacy: .public)")
+            }
+        }
+
+        /// Lets the user pick files or images and inserts their paths like a drop, so they can be
+        /// attached to an agent CLI prompt (Claude Code, Codex, Antigravity) without dragging.
+        @IBAction func wispAttachFiles(_ sender: Any?) {
+            guard let window else { return }
+            let panel = NSOpenPanel()
+            panel.allowsMultipleSelection = true
+            panel.canChooseFiles = true
+            panel.canChooseDirectories = true
+            panel.prompt = "Attach"
+            panel.message = "Choose files or images to insert into the prompt"
+            panel.directoryURL = pwd.map { URL(fileURLWithPath: $0) }
+            panel.beginSheetModal(for: window) { [weak self] response in
+                guard response == .OK, let self else { return }
+                let quoting = WispDragDropDefaults.quoting
+                self.wispInsertAttachments(
+                    panel.urls.map { quoting.apply(to: $0.path) },
+                    separator: WispDragDropDefaults.separator)
             }
         }
 
@@ -2425,10 +2447,14 @@ extension Ghostty.SurfaceView: NSMenuItemValidation {
 // MARK: NSDraggingDestination
 
 extension Ghostty.SurfaceView {
-    static let dropTypes: Set<NSPasteboard.PasteboardType> = [
+    static let dropTypes: Set<NSPasteboard.PasteboardType> = Set([
         .string,
-        .fileURL
-    ]
+        .fileURL,
+        // Wisp: raw images and promised files (Photos, browser images) so they can be
+        // attached to agent CLIs. See WispAttachments.
+        .png,
+        .tiff,
+    ] + NSFilePromiseReceiver.readableDraggedTypes.map { NSPasteboard.PasteboardType($0) })
 
     override func draggingEntered(_ sender: any NSDraggingInfo) -> NSDragOperation {
         guard let types = sender.draggingPasteboard.types else { return [] }
@@ -2446,27 +2472,76 @@ extension Ghostty.SurfaceView {
 
     override func performDragOperation(_ sender: any NSDraggingInfo) -> Bool {
         let pb = sender.draggingPasteboard
+        let quoting = WispDragDropDefaults.quoting
+        let separator = WispDragDropDefaults.separator
+
+        // Files the source only promises (a photo from Photos, an image from a browser) are
+        // written out first and inserted one by one as they land.
+        let receivers = WispAttachments.promiseReceivers(for: pb)
+        if !receivers.isEmpty {
+            var continuing = false
+            WispAttachments.receive(receivers) { [weak self] url in
+                self?.wispInsertAttachments(
+                    [quoting.apply(to: url.path)],
+                    separator: separator,
+                    continuing: continuing)
+                continuing = true
+            }
+            return true
+        }
 
         // Drops go through Wisp's own quoting/separator preferences instead of
         // `getOpinionatedStringContents()`. That helper is shared with the three paste paths
         // and must keep upstream's space-joined, backslash-escaped semantics, so the policy
         // split lives here at the drop seam rather than inside the pasteboard helper.
         // See Features/Settings/DragDropSettingsView.swift.
-        let content = pb.getDropStringContents(
-            quoting: WispDragDropDefaults.quoting,
-            separator: WispDragDropDefaults.separator)
+        var items = pb.getDropItems(quoting: quoting)
 
-        if let content {
-            DispatchQueue.main.async {
-                self.insertText(
-                    content,
-                    replacementRange: NSRange(location: 0, length: 0)
-                )
-            }
-            return true
+        // Image data with no file path or text at all gets saved so it can be attached.
+        if items.isEmpty, let url = WispAttachments.saveImage(from: pb) {
+            items = [quoting.apply(to: url.path)]
         }
+        guard !items.isEmpty else { return false }
 
-        return false
+        DispatchQueue.main.async {
+            self.wispInsertAttachments(items, separator: separator)
+        }
+        return true
+    }
+
+    /// Inserts dropped or attached items, each as its own paste, with the separator between.
+    ///
+    /// Agent CLIs only turn a paste into an attachment when the whole paste is one path (Codex
+    /// ignores anything else), so one paste per item lets several images attach at once. A
+    /// shell still ends up with the same line a single joined paste would give.
+    ///
+    /// - Parameter continuing: Sends a separator before the first item too, for items that
+    ///   arrive one at a time.
+    func wispInsertAttachments(
+        _ items: [String],
+        separator: WispMultiFileDropSeparator,
+        continuing: Bool = false
+    ) {
+        guard let surfaceModel else { return }
+
+        // Whatever was being composed in an input method is over, like in `insertText`.
+        unmarkText()
+
+        // A path may legally contain a newline on APFS. Neither `Ghostty.Shell.escape` (which
+        // does not escape `\n`) nor `Ghostty.Shell.quote` (which preserves it inside the single
+        // quotes) removes it from the token, so a newline-separated list would be unparseable by
+        // any consumer that splits on lines — which is exactly the consumer this separator
+        // exists for. Fall back to a space for that one drop.
+        let containsNewline = items.contains { $0.contains(where: \.isNewline) }
+        let effective: WispMultiFileDropSeparator =
+            (separator == .newline && containsNewline) ? .space : separator
+
+        for (index, item) in items.enumerated() {
+            if index > 0 || continuing {
+                surfaceModel.sendText(effective.literal)
+            }
+            surfaceModel.sendText(item)
+        }
     }
 }
 

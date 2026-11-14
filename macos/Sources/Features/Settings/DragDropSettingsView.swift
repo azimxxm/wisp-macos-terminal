@@ -28,7 +28,7 @@ enum WispDragDropQuoting: String, CaseIterable, Identifiable {
     /// existing `Ghostty.Shell.quote`. This is the only mode that keeps a path containing a
     /// newline as a single *shell* word — note that a newline-joined multi-file drop still
     /// falls back to a space in that case, because a line-splitting consumer cannot tell the
-    /// embedded newline from a separator. See `getDropStringContents`.
+    /// embedded newline from a separator. See `SurfaceView.wispInsertAttachments`.
     case posixQuote = "posixQuote"
 
     var id: String { rawValue }

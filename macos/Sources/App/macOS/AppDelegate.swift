@@ -235,6 +235,7 @@ class AppDelegate: NSObject,
         // Add the Wisp "Toggle Git Bar" item to the View menu.
         installGitBarMenuItem()
         installCopyLastCommandOutputMenuItem()
+        installAttachFilesMenuItem()
 
         // Add the Wisp "Welcome to Wisp" item to the Help menu and show it on first launch.
         installWelcomeMenuItem()
@@ -1022,6 +1023,26 @@ class AppDelegate: NSObject,
         let copyIndex = editMenu.indexOfItem(withTarget: nil, andAction: #selector(NSText.copy(_:)))
         if copyIndex >= 0 {
             editMenu.insertItem(item, at: copyIndex + 1)
+        } else {
+            editMenu.addItem(item)
+        }
+    }
+
+    /// Adds an "Attach Files…" item (⌘⇧A) under Paste in the Edit menu. Like Copy Last Command
+    /// Output it has no target, so it reaches the focused terminal surface through the
+    /// responder chain.
+    private func installAttachFilesMenuItem() {
+        guard let editMenu = NSApp.mainMenu?.item(withTitle: "Edit")?.submenu else { return }
+
+        let item = NSMenuItem(
+            title: "Attach Files…",
+            action: #selector(Ghostty.SurfaceView.wispAttachFiles(_:)),
+            keyEquivalent: "a")
+        item.keyEquivalentModifierMask = [.command, .shift]
+
+        let pasteIndex = editMenu.indexOfItem(withTarget: nil, andAction: #selector(NSText.paste(_:)))
+        if pasteIndex >= 0 {
+            editMenu.insertItem(item, at: pasteIndex + 1)
         } else {
             editMenu.addItem(item)
         }

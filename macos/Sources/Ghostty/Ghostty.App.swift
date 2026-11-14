@@ -393,7 +393,14 @@ extension Ghostty {
 
             // Return false if there is no text-like clipboard content so
             // performable paste bindings can pass through to the terminal.
-            guard let str = pasteboard.getOpinionatedStringContents() else { return false }
+            //
+            // Wisp: an image-only clipboard (a screenshot copied with ⌃⇧⌘4, an image
+            // copied in a browser) is saved to a file and its path pasted instead, so
+            // agent CLIs attach it on ⌘V. Text and file paths still win. This callback
+            // also serves OSC 52 reads, which then receive that path too.
+            guard let str = pasteboard.getOpinionatedStringContents()
+                ?? WispAttachments.saveImage(from: pasteboard).map({ Ghostty.Shell.escape($0.path) })
+            else { return false }
 
             completeClipboardRequest(surface, data: str, state: state)
             return true

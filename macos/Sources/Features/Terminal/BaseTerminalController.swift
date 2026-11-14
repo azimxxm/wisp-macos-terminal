@@ -1193,7 +1193,7 @@ class BaseTerminalController: NSWindowController,
         if window is TitlebarTabsTahoeTerminalWindow || window is TitlebarTabsVenturaTerminalWindow { return }
         guard window.styleMask.contains(.titled) else { return }
 
-        let container = NSView(frame: NSRect(x: 0, y: 0, width: 114, height: 28))
+        let container = NSView(frame: NSRect(x: 0, y: 0, width: 140, height: 28))
         let toggle = wispTitlebarButton(
             symbol: "sidebar.left",
             tooltip: "Toggle File Sidebar (⌘⌥B)",
@@ -1214,10 +1214,16 @@ class BaseTerminalController: NSWindowController,
             tooltip: "Toggle Git Bar (⌘⌥G)",
             action: #selector(toggleWispGitBar(_:)))
         gitBar.frame = NSRect(x: 84, y: 3, width: 24, height: 22)
+        let attach = wispTitlebarButton(
+            symbol: "paperclip",
+            tooltip: "Attach Files (⌘⇧A)",
+            action: #selector(attachWispFiles(_:)))
+        attach.frame = NSRect(x: 110, y: 3, width: 24, height: 22)
         container.addSubview(toggle)
         container.addSubview(newTab)
         container.addSubview(claudeHUD)
         container.addSubview(gitBar)
+        container.addSubview(attach)
 
         let accessory = NSTitlebarAccessoryViewController()
         accessory.view = container
@@ -1241,6 +1247,10 @@ class BaseTerminalController: NSWindowController,
 
     @objc private func toggleWispGitBar(_ sender: Any?) {
         NotificationCenter.default.post(name: .wispToggleGitBar, object: nil)
+    }
+
+    @objc private func attachWispFiles(_ sender: Any?) {
+        focusedSurface?.wispAttachFiles(sender)
     }
 
     /// Usage store + popover backing the Claude HUD titlebar button.
