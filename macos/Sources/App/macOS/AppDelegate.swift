@@ -240,6 +240,10 @@ class AppDelegate: NSObject,
         installWelcomeMenuItem()
         showWispWelcomeIfFirstLaunch()
 
+        // Ask for the AI permissions (Accessibility, Screen Recording, ...) up front.
+        installAIPermissionsMenuItem()
+        showAIPermissionsWhenReady()
+
         // Start our update checker.
         updateController.startUpdater()
 
@@ -1044,6 +1048,38 @@ class AppDelegate: NSObject,
 
     @objc func showWispWelcome(_ sender: Any?) {
         WispWelcomeController.shared.show()
+    }
+
+    /// Adds "AI Permissions…" to the Help menu, right under "Welcome to Wisp".
+    private func installAIPermissionsMenuItem() {
+        guard let helpMenu = NSApp.mainMenu?.item(withTitle: "Help")?.submenu else { return }
+        let item = NSMenuItem(
+            title: "AI Permissions…",
+            action: #selector(showAIPermissions(_:)),
+            keyEquivalent: "")
+        item.target = self
+        helpMenu.insertItem(item, at: 1)
+    }
+
+    /// Opens the permissions window on launch while a required permission is missing.
+    /// On first launch it waits until the welcome screen is closed so the two don't overlap.
+    private func showAIPermissionsWhenReady() {
+        DispatchQueue.main.async {
+            guard let welcome = WispWelcomeController.shared.window, welcome.isVisible else {
+                Task { await AIPermissionsController.shared.showIfAnyRequiredMissing() }
+                return
+            }
+            Task { @MainActor in
+                let closes = NotificationCenter.default.notifications(
+                    named: NSWindow.willCloseNotification, object: welcome)
+                for await _ in closes { break }
+                await AIPermissionsController.shared.showIfAnyRequiredMissing()
+            }
+        }
+    }
+
+    @objc func showAIPermissions(_ sender: Any?) {
+        AIPermissionsController.shared.show()
     }
 
     @IBAction func openConfig(_ sender: Any?) {
