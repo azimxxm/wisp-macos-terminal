@@ -2,6 +2,11 @@ import AppKit
 import Cocoa
 import GhosttyKit
 
+// Wisp: started as `wisp` (the Contents/MacOS/wisp link) means "run the CLI", not the app.
+if URL(fileURLWithPath: CommandLine.arguments[0]).lastPathComponent == "wisp" {
+    exit(WispCLI.main(Array(CommandLine.arguments.dropFirst())))
+}
+
 // Initialize Ghostty global state. We do this once right away because the
 // CLI APIs require it and it lets us ensure it is done immediately for the
 // rest of the app.

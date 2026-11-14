@@ -243,6 +243,11 @@ class AppDelegate: NSObject,
         // Ask for the AI permissions (Accessibility, Screen Recording, ...) up front.
         installAIPermissionsMenuItem()
         showAIPermissionsWhenReady()
+        AIPermissionsController.shared.watchForLostPermissions()
+
+        // Track AI agents in terminals (waiting badge, keep-awake) and add the agents panel.
+        AgentActivity.shared.start()
+        installAgentsPanelMenuItem()
 
         // Start our update checker.
         updateController.startUpdater()
@@ -1080,6 +1085,23 @@ class AppDelegate: NSObject,
 
     @objc func showAIPermissions(_ sender: Any?) {
         AIPermissionsController.shared.show()
+    }
+
+    /// Adds "AI Agents" (⌘⌥A) to the Window menu: a floating list of every running agent.
+    private func installAgentsPanelMenuItem() {
+        guard let windowMenu = NSApp.windowsMenu ?? NSApp.mainMenu?.item(withTitle: "Window")?.submenu else { return }
+        let item = NSMenuItem(
+            title: "AI Agents",
+            action: #selector(toggleAgentsPanel(_:)),
+            keyEquivalent: "a")
+        item.keyEquivalentModifierMask = [.command, .option]
+        item.target = self
+        windowMenu.insertItem(.separator(), at: 0)
+        windowMenu.insertItem(item, at: 0)
+    }
+
+    @objc func toggleAgentsPanel(_ sender: Any?) {
+        AgentsPanelController.shared.toggle()
     }
 
     @IBAction func openConfig(_ sender: Any?) {
