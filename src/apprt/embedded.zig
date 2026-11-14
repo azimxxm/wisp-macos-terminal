@@ -1642,6 +1642,21 @@ pub const CAPI = struct {
         return readTextLocked(surface, core_sel, result);
     }
 
+    /// Reads the output of the last finished command (needs shell integration
+    /// prompt marks). Returns false when there is no command output to read.
+    export fn ghostty_surface_read_last_command_output(
+        surface: *Surface,
+        result: *Text,
+    ) bool {
+        surface.core_surface.renderer_state.mutex.lock();
+        defer surface.core_surface.renderer_state.mutex.unlock();
+
+        const core_sel = surface.core_surface.renderer_state.terminal.screens.active
+            .selectLastOutput() orelse return false;
+
+        return readTextLocked(surface, core_sel, result);
+    }
+
     fn readTextLocked(
         surface: *Surface,
         core_sel: terminal.Selection,
