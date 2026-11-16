@@ -97,6 +97,9 @@ enum PermissionProbe {
         case .fullDiskAccess:
             return fullDiskAccessStatus()
         case .automation:
+            // After a reboot System Events is not running yet, and macOS can't tell us about
+            // a grant until it is. Start it quietly so a saved grant reads as granted.
+            if !isSystemEventsRunning { await launchSystemEvents() }
             return await Task.detached { automationStatus(askUser: false) }.value
         case .microphone:
             return microphoneStatus()
@@ -168,6 +171,10 @@ enum PermissionProbe {
         case Int(errAEEventNotPermitted): return .denied
         default: return .notDetermined // not asked yet, or System Events is not running
         }
+    }
+
+    private static var isSystemEventsRunning: Bool {
+        !NSRunningApplication.runningApplications(withBundleIdentifier: systemEventsBundleID).isEmpty
     }
 
     /// Apple Events permission can only be asked while the target app is running.

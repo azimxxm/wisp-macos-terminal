@@ -40,6 +40,8 @@ struct SettingsView: View {
                     DragDropSettingsView()
                 case .claude:
                     ClaudePanelView()
+                case .permissions:
+                    PermissionsSettingsView()
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
@@ -75,6 +77,7 @@ enum SettingsSection: String, CaseIterable, Identifiable {
     case notifications
     case dragDrop
     case claude
+    case permissions
 
     var id: String { rawValue }
 
@@ -85,6 +88,7 @@ enum SettingsSection: String, CaseIterable, Identifiable {
         case .notifications: return "Notifications"
         case .dragDrop: return "Drag & Drop"
         case .claude: return "Claude"
+        case .permissions: return "Permissions"
         }
     }
 
@@ -95,6 +99,7 @@ enum SettingsSection: String, CaseIterable, Identifiable {
         case .notifications: return "bell.badge.fill"
         case .dragDrop: return "hand.draw.fill"
         case .claude: return "sparkles"
+        case .permissions: return "lock.shield.fill"
         }
     }
 
@@ -106,6 +111,7 @@ enum SettingsSection: String, CaseIterable, Identifiable {
         case .notifications: return .orange
         case .dragDrop: return .teal
         case .claude: return .purple
+        case .permissions: return .green
         }
     }
 }
