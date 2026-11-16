@@ -80,7 +80,7 @@ struct AIPermissionsView: View {
 }
 
 /// One permission: what it is for, its live status, and the action that asks for it.
-private struct PermissionRow: View {
+struct PermissionRow: View {
     let permission: AIPermission
     let status: PermissionStatus
     let isBusy: Bool
